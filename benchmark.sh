@@ -52,14 +52,14 @@ run_rust_benchmark() {
     cd "$SCRIPT_DIR"
 
     # Ensure binary exists
-    if [ ! -f "./mssql-pg-migrate" ]; then
-        echo -e "${RED}Error: mssql-pg-migrate binary not found. Run: cargo build --release --features tui && cp target/release/mssql-pg-migrate .${NC}"
+    if [ ! -f "./dmt-rs" ]; then
+        echo -e "${RED}Error: dmt-rs binary not found. Run: cargo build --release --features tui && cp target/release/dmt-rs .${NC}"
         exit 1
     fi
 
     START_TIME=$(date +%s.%N)
 
-    ./mssql-pg-migrate -c benchmark-config.yaml run 2>&1 | tee /tmp/rust_benchmark.log
+    ./dmt-rs -c benchmark-config.yaml run 2>&1 | tee /tmp/rust_benchmark.log
 
     END_TIME=$(date +%s.%N)
     RUST_DURATION=$(echo "$END_TIME - $START_TIME" | bc)

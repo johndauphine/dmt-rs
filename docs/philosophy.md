@@ -1,6 +1,6 @@
 # Philosophy
 
-This document explains *why* `mssql-pg-migrate` exists, what it is, and — equally important — what it is **not**. It describes the values and tradeoffs that should guide every design decision in the codebase.
+This document explains *why* `dmt-rs` exists, what it is, and — equally important — what it is **not**. It describes the values and tradeoffs that should guide every design decision in the codebase.
 
 ## Why this tool exists
 
@@ -13,7 +13,7 @@ The original problem: moving large datasets between SQL Server and PostgreSQL (a
 
 Off-the-shelf options each missed at least one of these. Commercial ETL platforms (Informatica, Talend, Fivetran, Airbyte) are too heavy and too operational. Hand-written Python scripts are too slow and too fragile. SSIS doesn't run outside Windows. ODBC-based pipelines require external runtime dependencies that defeat the "drop a static binary into a container" model.
 
-`mssql-pg-migrate` is a single static Rust binary that you point at two databases and run. That's the entire user experience. Every other design decision flows from preserving that.
+`dmt-rs` is a single static Rust binary that you point at two databases and run. That's the entire user experience. Every other design decision flows from preserving that.
 
 ## Core values (in priority order)
 
@@ -25,7 +25,7 @@ When two values conflict, the higher-listed one wins. These are not aspirational
 
 3. **Convenience over flexibility.** When a sensible default exists, it should *be* the default — not a config knob. Auto-tuning is the canonical example: chunk size, parallel readers, and parallel writers are computed from system resources unless the user explicitly overrides them. Most users never touch these.
 
-4. **Observable failure over silent retry.** Every error returns a specific exit code (`crates/mssql-pg-migrate/src/error.rs`) so Airflow / Kubernetes / shell scripts can react appropriately. Errors are categorized by recoverability (`is_recoverable()`) so retry policies can be sane. We do not paper over failures with silent retry loops.
+4. **Observable failure over silent retry.** Every error returns a specific exit code (`crates/dmt-rs/src/error.rs`) so Airflow / Kubernetes / shell scripts can react appropriately. Errors are categorized by recoverability (`is_recoverable()`) so retry policies can be sane. We do not paper over failures with silent retry loops.
 
 5. **Idempotent by default.** `run` automatically resumes from database-stored state if a previous run was interrupted. Watermarked upserts mean re-running a migration that already ran is cheap and safe. The user should be able to invoke the binary in a cron job or DAG without thinking about "did this already run?"
 
@@ -37,7 +37,7 @@ These are deliberate non-goals. Requests to add them should be declined or pushe
 
 - **Not a schema migration / DDL versioning tool.** We do not track schema changes, generate migration scripts, or roll back DDL. Use Flyway, Liquibase, sqlx-migrate, or Atlas for that. Our schema creation is destructive (`drop_recreate`) or skipped (`upsert` against existing tables).
 
-- **Not a generic ETL framework.** No transformations, no UDFs, no pipelines, no DAG. Source columns map 1:1 to target columns via type-preserving rules. If you need to compute, filter, or reshape rows, do it before or after — `mssql-pg-migrate` is the bulk-load step in *your* pipeline, not the pipeline itself.
+- **Not a generic ETL framework.** No transformations, no UDFs, no pipelines, no DAG. Source columns map 1:1 to target columns via type-preserving rules. If you need to compute, filter, or reshape rows, do it before or after — `dmt-rs` is the bulk-load step in *your* pipeline, not the pipeline itself.
 
 - **Not a GUI or interactive product.** The TUI (`tui` feature) exists for one purpose: making the wizard / progress visible during ad-hoc local runs. It is not a replacement for the headless CLI, and the CLI must remain fully functional without it.
 

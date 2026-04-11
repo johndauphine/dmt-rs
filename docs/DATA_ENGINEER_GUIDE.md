@@ -1,6 +1,6 @@
-# mssql-pg-migrate: Data Engineer's Guide
+# dmt-rs: Data Engineer's Guide
 
-A comprehensive technical reference for data engineers using mssql-pg-migrate-rs, a high-performance database migration tool supporting MSSQL, PostgreSQL, and MySQL.
+A comprehensive technical reference for data engineers using dmt-rs-rs, a high-performance database migration tool supporting MSSQL, PostgreSQL, and MySQL.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ A comprehensive technical reference for data engineers using mssql-pg-migrate-rs
 
 ## Overview
 
-mssql-pg-migrate-rs is a production-ready data migration tool designed for:
+dmt-rs-rs is a production-ready data migration tool designed for:
 
 - **High throughput**: 160K-200K rows/sec for bulk and upsert operations
 - **Incremental sync**: Efficient `INSERT...ON CONFLICT DO UPDATE` for upserts
@@ -311,7 +311,7 @@ target:
 ### Global Options
 
 ```bash
-mssql-pg-migrate [OPTIONS] <COMMAND>
+dmt-rs [OPTIONS] <COMMAND>
 
 Options:
   -c, --config <PATH>           Config file path (default: config.yaml)
@@ -326,7 +326,7 @@ Options:
 ### run - Execute Migration
 
 ```bash
-mssql-pg-migrate -c config.yaml run [OPTIONS]
+dmt-rs -c config.yaml run [OPTIONS]
 
 Options:
       --dry-run              Validate without transferring data
@@ -339,22 +339,22 @@ Options:
 
 ```bash
 # Basic migration
-mssql-pg-migrate -c config.yaml run
+dmt-rs -c config.yaml run
 
 # Dry run to validate
-mssql-pg-migrate -c config.yaml run --dry-run
+dmt-rs -c config.yaml run --dry-run
 
 # With resume capability
-mssql-pg-migrate -c config.yaml --state-file /tmp/migration.state run
+dmt-rs -c config.yaml --state-file /tmp/migration.state run
 
 # JSON output for Airflow
-mssql-pg-migrate -c config.yaml --output-json run
+dmt-rs -c config.yaml --output-json run
 ```
 
 ### resume - Continue Interrupted Migration
 
 ```bash
-mssql-pg-migrate -c config.yaml --state-file /tmp/migration.state resume
+dmt-rs -c config.yaml --state-file /tmp/migration.state resume
 ```
 
 **State file validation**:
@@ -365,7 +365,7 @@ mssql-pg-migrate -c config.yaml --state-file /tmp/migration.state resume
 ### validate - Row Count Check
 
 ```bash
-mssql-pg-migrate -c config.yaml validate
+dmt-rs -c config.yaml validate
 ```
 
 Quick check that row counts match between source and target.
@@ -373,7 +373,7 @@ Quick check that row counts match between source and target.
 ### health-check - Connection Test
 
 ```bash
-mssql-pg-migrate -c config.yaml health-check
+dmt-rs -c config.yaml health-check
 ```
 
 Validates connectivity to both source and target databases.
@@ -381,7 +381,7 @@ Validates connectivity to both source and target databases.
 ### init - Interactive Configuration Wizard
 
 ```bash
-mssql-pg-migrate init [OPTIONS]
+dmt-rs init [OPTIONS]
 
 Options:
   -o, --output <PATH>  Output file (default: config.yaml)
@@ -392,7 +392,7 @@ Options:
 ### tui - Terminal UI Mode
 
 ```bash
-mssql-pg-migrate -c config.yaml tui
+dmt-rs -c config.yaml tui
 ```
 
 Launches interactive terminal UI with real-time progress monitoring.
@@ -516,7 +516,7 @@ with DAG(
     migrate = BashOperator(
         task_id='incremental_sync',
         bash_command='''
-            mssql-pg-migrate \
+            dmt-rs \
                 -c /opt/airflow/config/migration.yaml \
                 --state-file /tmp/{{ run_id }}.state \
                 --output-json \
@@ -529,7 +529,7 @@ with DAG(
     validate = BashOperator(
         task_id='validate_sync',
         bash_command='''
-            mssql-pg-migrate \
+            dmt-rs \
                 -c /opt/airflow/config/migration.yaml \
                 --output-json \
                 validate
@@ -545,13 +545,13 @@ with DAG(
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: mssql-pg-migrate
+  name: dmt-rs
 spec:
   template:
     spec:
       containers:
       - name: migrate
-        image: your-registry/mssql-pg-migrate:latest
+        image: your-registry/dmt-rs:latest
         args:
           - "-c"
           - "/config/migration.yaml"
@@ -587,7 +587,7 @@ spec:
 version: '3.8'
 services:
   migrate:
-    image: your-registry/mssql-pg-migrate:latest
+    image: your-registry/dmt-rs:latest
     volumes:
       - ./config.yaml:/config.yaml:ro
       - ./state:/state
@@ -669,19 +669,19 @@ Error: Config hash mismatch - cannot resume with different configuration
 Enable debug logging:
 
 ```bash
-mssql-pg-migrate -c config.yaml --verbosity debug run
+dmt-rs -c config.yaml --verbosity debug run
 ```
 
 JSON log format for parsing:
 
 ```bash
-mssql-pg-migrate -c config.yaml --log-format json run 2>&1 | jq
+dmt-rs -c config.yaml --log-format json run 2>&1 | jq
 ```
 
 Progress monitoring:
 
 ```bash
-mssql-pg-migrate -c config.yaml --progress run 2>&1 | \
+dmt-rs -c config.yaml --progress run 2>&1 | \
     while read line; do echo "$line" | jq -r '.table + ": " + (.rows_transferred | tostring)'; done
 ```
 
@@ -800,4 +800,4 @@ mssql-pg-migrate -c config.yaml --progress run 2>&1 | \
 
 ---
 
-*Documentation generated for mssql-pg-migrate-rs v1.41.0*
+*Documentation generated for dmt-rs-rs v1.41.0*

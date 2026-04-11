@@ -19,9 +19,9 @@ echo -e "${BLUE}========================================${NC}"
 cd "$SCRIPT_DIR"
 
 # Ensure binary exists
-if [ ! -f "./mssql-pg-migrate" ]; then
+if [ ! -f "./dmt-rs" ]; then
     echo "Building binary..."
-    cargo build --release --features tui && cp target/release/mssql-pg-migrate .
+    cargo build --release --features tui && cp target/release/dmt-rs .
 fi
 
 # Reset PostgreSQL
@@ -42,7 +42,7 @@ echo -e "${GREEN}Done${NC}"
 echo -e "\n${YELLOW}Running Rust migration...${NC}"
 echo ""
 
-time ./mssql-pg-migrate -c benchmark-config.yaml run
+time ./dmt-rs -c benchmark-config.yaml run
 
 echo ""
 echo -e "${BLUE}========================================${NC}"

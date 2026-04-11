@@ -1,6 +1,6 @@
 # Technical Specifications
 
-This document is the authoritative reference for what `mssql-pg-migrate` supports, what it requires, and what guarantees it makes. It complements [`philosophy.md`](philosophy.md) (the "why") and [`design.md`](design.md) (the "how"). The audience is anyone who needs to verify this tool will fit a specific environment before adopting it.
+This document is the authoritative reference for what `dmt-rs` supports, what it requires, and what guarantees it makes. It complements [`philosophy.md`](philosophy.md) (the "why") and [`design.md`](design.md) (the "how"). The audience is anyone who needs to verify this tool will fit a specific environment before adopting it.
 
 For end-user operational guidance see [`DATA_ENGINEER_GUIDE.md`](DATA_ENGINEER_GUIDE.md).
 For raw configuration examples see `../config.example.yaml` and `../examples/`.
@@ -9,8 +9,8 @@ For raw configuration examples see `../config.example.yaml` and `../examples/`.
 
 | Crate | Purpose |
 |---|---|
-| `mssql-pg-migrate` | Core library — all migration logic, public API for embedders |
-| `mssql-pg-migrate-cli` | CLI binary — clap argument parsing, wizard, optional TUI |
+| `dmt-rs` | Core library — all migration logic, public API for embedders |
+| `dmt-rs-cli` | CLI binary — clap argument parsing, wizard, optional TUI |
 
 Both crates are in a Rust 2021 workspace at the repo root. MSRV is **1.75**. The CLI is published as a binary; the library is `publish = false` by default but is structured so it could be published independently.
 
@@ -30,9 +30,9 @@ The output is a single statically-linked binary with no runtime dependencies (no
 
 | Feature | Crate | Default | What it does |
 |---|---|---|---|
-| `mysql` | `mssql-pg-migrate` | off | MySQL/MariaDB source and target via `mysql_async`. Adds `LOAD DATA LOCAL INFILE` for large text tables. |
+| `mysql` | `dmt-rs` | off | MySQL/MariaDB source and target via `mysql_async`. Adds `LOAD DATA LOCAL INFILE` for large text tables. |
 | `kerberos` | both | off | MSSQL Kerberos auth via GSSAPI. Linux requires `libgssapi-krb5-2`; macOS uses `GSS.framework`; Windows uses SSPI. |
-| `tui` | `mssql-pg-migrate-cli` | off | Terminal UI for interactive runs (ratatui). The headless CLI must remain fully functional without this. |
+| `tui` | `dmt-rs-cli` | off | Terminal UI for interactive runs (ratatui). The headless CLI must remain fully functional without this. |
 
 Common build commands:
 
@@ -85,7 +85,7 @@ PostgreSQL `ssl_mode` accepts: `disable`, `prefer`, `require`, `verify-ca`, `ver
 
 ## Type mapping
 
-Type mapping is canonical: each source type is mapped to a canonical type, and each canonical type has per-target encoders. See `crates/mssql-pg-migrate/src/dialect/canonical.rs` and `dialect/typemap.rs` for implementation.
+Type mapping is canonical: each source type is mapped to a canonical type, and each canonical type has per-target encoders. See `crates/dmt-rs/src/dialect/canonical.rs` and `dialect/typemap.rs` for implementation.
 
 ### MSSQL → PostgreSQL
 
@@ -167,7 +167,7 @@ Tables with no matching date column fall back to a full sync.
 
 ## Configuration reference
 
-Configuration is YAML (or JSON via `-c config.json`). The full schema is defined in `crates/mssql-pg-migrate/src/config/types.rs`.
+Configuration is YAML (or JSON via `-c config.json`). The full schema is defined in `crates/dmt-rs/src/config/types.rs`.
 
 ### Top-level structure
 
@@ -235,7 +235,7 @@ The defaults are documented in `MigrationConfig::default()` (`config/types.rs`).
 ## CLI reference
 
 ```
-mssql-pg-migrate [GLOBAL OPTIONS] <COMMAND>
+dmt-rs [GLOBAL OPTIONS] <COMMAND>
 ```
 
 | Global option | Description |
@@ -266,7 +266,7 @@ mssql-pg-migrate [GLOBAL OPTIONS] <COMMAND>
 
 ## Exit codes
 
-Defined in `crates/mssql-pg-migrate/src/error.rs`. These are designed for Airflow / Kubernetes / shell-script consumption — each maps to a single error category.
+Defined in `crates/dmt-rs/src/error.rs`. These are designed for Airflow / Kubernetes / shell-script consumption — each maps to a single error category.
 
 | Code | Constant | Category | Recoverable? |
 |---|---|---|---|
@@ -283,19 +283,19 @@ Defined in `crates/mssql-pg-migrate/src/error.rs`. These are designed for Airflo
 
 ## State storage
 
-Migration state is stored *in the target database* under a `_mssql_pg_migrate` schema. The schema is in `crates/mssql-pg-migrate/src/state/schema.sql` and is initialized automatically on first run.
+Migration state is stored *in the target database* under a `_dmt_rs` schema. The schema is in `crates/dmt-rs/src/state/schema.sql` and is initialized automatically on first run.
 
 ### Tables
 
 ```sql
-_mssql_pg_migrate.migration_runs
+_dmt_rs.migration_runs
   run_id          uuid          PRIMARY KEY
   config_hash     text          HMAC-SHA256 of the config (used to detect drift)
   started_at      timestamptz
   completed_at    timestamptz   NULL until finished
   status          text          'running' | 'completed' | 'failed' | 'cancelled'
 
-_mssql_pg_migrate.table_state
+_dmt_rs.table_state
   run_id              uuid       FK -> migration_runs
   table_name          text
   rows_total          bigint

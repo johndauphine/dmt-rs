@@ -1,14 +1,14 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Root workspace uses Rust with two crates: `crates/mssql-pg-migrate` (core library) and `crates/mssql-pg-migrate-cli` (CLI).
+- Root workspace uses Rust with two crates: `crates/dmt-rs` (core library) and `crates/dmt-rs-cli` (CLI).
 - Config examples live in `examples/` and `config.yaml` at the root; state/config samples like `test-config.yaml` may exist locally.
-- Rust sources: `crates/mssql-pg-migrate/src/` (config, orchestrator, transfer, source, target, typemap, state, error) and `crates/mssql-pg-migrate-cli/src/main.rs` for the CLI entrypoint.
+- Rust sources: `crates/dmt-rs/src/` (config, orchestrator, transfer, source, target, typemap, state, error) and `crates/dmt-rs-cli/src/main.rs` for the CLI entrypoint.
 
 ## Build, Test, and Development Commands
 - Build release binaries: `cargo build --release`.
 - Run all tests: `cargo test`.
-- Run CLI with a config: `target/release/mssql-pg-migrate -c config.yaml run`.
+- Run CLI with a config: `target/release/dmt-rs -c config.yaml run`.
 - Lint/format (if installed): `cargo fmt -- --check` and `cargo clippy --all-targets --all-features`.
 
 ## Coding Style & Naming Conventions

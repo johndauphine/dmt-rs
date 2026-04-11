@@ -14,7 +14,7 @@
 set -e
 
 CONFIG_FILE="${1:-test-config.yaml}"
-BINARY="./target/release/mssql-pg-migrate"
+BINARY="./target/release/dmt-rs"
 
 echo "=== Dry-Run Tests ==="
 echo "Config: $CONFIG_FILE"

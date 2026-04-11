@@ -1,6 +1,6 @@
 # Performance Tuning Guide
 
-This document provides guidance on tuning `mssql-pg-migrate` for optimal performance based on extensive benchmarking.
+This document provides guidance on tuning `dmt-rs` for optimal performance based on extensive benchmarking.
 
 ## Benchmark Environment
 

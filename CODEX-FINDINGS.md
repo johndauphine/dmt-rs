@@ -1,18 +1,18 @@
 # Codex Findings
 
 ## Scope
-- Reviewed Rust repo `/home/johnd/repos/mssql-pg-migrate-rs` against the earlier Go tool `/home/johnd/repos/mssql-pg-migrate`.
+- Reviewed Rust repo `/home/johnd/repos/dmt-rs-rs` against the earlier Go tool `/home/johnd/repos/dmt-rs`.
 - Focus: perf gaps, security posture, and correctness for the MSSQL → Postgres CLI.
 
 ## Current state and measurements
 - Branch: `perf-optimizations` (contains identifier quoting, smallint PK fix, auto-tune caps, parallel readers/writers).
-- Latest run: `./target/release/mssql-pg-migrate -c test-config.yaml run` (16 readers, auto-tuned 5 writers, chunk 100k) → 19,310,707 rows in 150.15s (~128,608 rows/s). Validation passed for all 10 tables.
+- Latest run: `./target/release/dmt-rs -c test-config.yaml run` (16 readers, auto-tuned 5 writers, chunk 100k) → 19,310,707 rows in 150.15s (~128,608 rows/s). Validation passed for all 10 tables.
 - Previous best (manual) was ~105s (~183k rows/s) with 16 readers / 8 writers before auto-tune limited writers.
 - Finalization (indexes/constraints) consumed ~83s of the 150s runtime.
 - `cargo test` currently fails offline (DNS to crates.io blocked).
 
 ## Improvements already landed
-- Added identifier quoting for MSSQL readers and Postgres DDL/DML/COPY (`crates/mssql-pg-migrate/src/transfer/mod.rs`, `src/target/mod.rs`).
+- Added identifier quoting for MSSQL readers and Postgres DDL/DML/COPY (`crates/dmt-rs/src/transfer/mod.rs`, `src/target/mod.rs`).
 - Fixed keyset pagination to advance last_pk for smallint/tinyint PKs (`src/transfer/mod.rs`).
 - Removed row-preview logging on upsert errors to avoid leaking data (`src/target/mod.rs`).
 - Auto-tune caps raised (up to 16 readers / 8 writers; higher pool ceilings in `src/config/types.rs`).

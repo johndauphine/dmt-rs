@@ -13,7 +13,7 @@ dmt-rs depends on a [forked tiberius](https://github.com/johndauphine/tiberius/t
 
 1. Confirm the API actually works against a real MSSQL instance.
 2. Confirm `packet_size` is configurable without forking.
-3. Stress the type system on the columns that have bitten us in tiberius (nullable numerics — see [PR #94](https://github.com/johndauphine/mssql-pg-migrate-rs/pull/94)).
+3. Stress the type system on the columns that have bitten us in tiberius (nullable numerics — see [PR #94](https://github.com/johndauphine/dmt-rs-rs/pull/94)).
 4. Get rough throughput numbers to compare against tiberius.
 
 ## TL;DR / Recommendation

@@ -24,7 +24,7 @@ set -e
 
 CONFIG_FILE="${1:-test-config.yaml}"
 STATE_FILE="${2:-state.json}"
-BINARY="./target/release/mssql-pg-migrate"
+BINARY="./target/release/dmt-rs"
 
 MAX_RETRIES=3
 RETRY=0

@@ -21,7 +21,7 @@ CONFIG_FILE="${1:-test-config.yaml}"
 SIGNAL="${2:-TERM}"
 DELAY="${3:-5}"
 STATE_FILE="signal-test-state.json"
-BINARY="./target/release/mssql-pg-migrate"
+BINARY="./target/release/dmt-rs"
 
 echo "=== Signal Handling Test ==="
 echo "Config: $CONFIG_FILE"

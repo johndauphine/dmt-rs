@@ -43,7 +43,7 @@ The optimization relies on each tier filtering down to only mismatched regions. 
 
 ### Affected Code
 
-#### `crates/mssql-pg-migrate/src/verify/universal.rs`
+#### `crates/dmt-rs/src/verify/universal.rs`
 
 **Original `compare_partition_counts` (lines 379-410):**
 ```rust
@@ -84,7 +84,7 @@ if tier1_mismatches.is_empty() {
 }
 ```
 
-#### `crates/mssql-pg-migrate/src/verify/hash_query.rs`
+#### `crates/dmt-rs/src/verify/hash_query.rs`
 
 NTILE queries only return `(partition_id, row_count)`:
 ```sql
@@ -131,10 +131,10 @@ Result: **All partitions show as mismatched**, defeating the entire tiered optim
 
 ### Files Modified (partial fix)
 
-- `crates/mssql-pg-migrate/src/verify/universal.rs` - Added hash comparison
-- `crates/mssql-pg-migrate/src/verify/hash_query.rs` - Added partition_hash to queries
-- `crates/mssql-pg-migrate/src/source/mod.rs` - Return `(partition_id, count, hash)` tuples
-- `crates/mssql-pg-migrate/src/target/mod.rs` - Same changes for PostgreSQL
+- `crates/dmt-rs/src/verify/universal.rs` - Added hash comparison
+- `crates/dmt-rs/src/verify/hash_query.rs` - Added partition_hash to queries
+- `crates/dmt-rs/src/source/mod.rs` - Return `(partition_id, count, hash)` tuples
+- `crates/dmt-rs/src/target/mod.rs` - Same changes for PostgreSQL
 
 ### Additional Issue Fixed
 
@@ -220,11 +220,11 @@ VALUES ('TestUser1', 'TestCity1', 100, 10, 1), ...
 
 | File | Purpose |
 |------|---------|
-| `crates/mssql-pg-migrate/src/verify/universal.rs` | Main verification logic |
-| `crates/mssql-pg-migrate/src/verify/hash_query.rs` | SQL query generation |
-| `crates/mssql-pg-migrate/src/source/mod.rs` | MSSQL pool operations |
-| `crates/mssql-pg-migrate/src/target/mod.rs` | PostgreSQL pool operations |
-| `crates/mssql-pg-migrate/src/transfer/mod.rs` | Row hash computation |
+| `crates/dmt-rs/src/verify/universal.rs` | Main verification logic |
+| `crates/dmt-rs/src/verify/hash_query.rs` | SQL query generation |
+| `crates/dmt-rs/src/source/mod.rs` | MSSQL pool operations |
+| `crates/dmt-rs/src/target/mod.rs` | PostgreSQL pool operations |
+| `crates/dmt-rs/src/transfer/mod.rs` | Row hash computation |
 
 ## Conclusion
 

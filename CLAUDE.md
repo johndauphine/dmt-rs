@@ -31,8 +31,8 @@ cargo test
 cargo test test_name
 
 # Run tests for a specific crate
-cargo test -p mssql-pg-migrate
-cargo test -p mssql-pg-migrate-cli
+cargo test -p dmt-rs
+cargo test -p dmt-rs-cli
 
 # Run tests with output
 cargo test -- --nocapture
@@ -48,25 +48,46 @@ cargo clippy --all-targets --all-features
 ## Running
 
 ```bash
-# Run migration
-./target/release/mssql-pg-migrate -c config.yaml run
+# Run migration (idempotent: auto-resumes from database state if it exists)
+./target/release/dmt-rs -c config.yaml run
 
-# Dry run (validate only)
-./target/release/mssql-pg-migrate -c config.yaml run --dry-run
+# Dry run (validate plan without transferring data)
+./target/release/dmt-rs -c config.yaml run --dry-run
+
+# Explicit crash recovery (errors if no state exists in target DB)
+./target/release/dmt-rs -c config.yaml resume
+
+# Validate row counts between source and target
+./target/release/dmt-rs -c config.yaml validate
 
 # Health check connections
-./target/release/mssql-pg-migrate -c config.yaml health-check
+./target/release/dmt-rs -c config.yaml health-check
 
-# Interactive config wizard
-./target/release/mssql-pg-migrate init
+# Interactive config wizard (use --advanced for tuning options)
+./target/release/dmt-rs init
+./target/release/dmt-rs init --advanced -o my-config.yaml
+
+# Launch interactive TUI (requires --features tui)
+./target/release/dmt-rs tui
+
+# JSON output for Airflow XCom
+./target/release/dmt-rs -c config.yaml --output-json run
 ```
+
+`run` is idempotent: state is stored in the target database (`_dmt_rs` schema). First invocation creates state; subsequent invocations resume / do incremental sync via date watermarks. `resume` is for explicit crash recovery and errors when no state exists.
+
+## Helper Scripts
+
+- `run-all-tests.sh` — runs the 18-permutation source/target/mode integration matrix against real DBs (note: uses a hardcoded binary path that may need editing)
+- `benchmark.sh`, `benchmark-rust-only.sh` — performance benchmarks
+- `scripts/test-airflow.sh`, `test-dry-run.sh`, `test-health-check.sh`, `test-signals.sh` — targeted scenario tests
 
 ## Architecture
 
 This is a Rust workspace with two crates:
 
-- **mssql-pg-migrate** (`crates/mssql-pg-migrate/`) - Core library
-- **mssql-pg-migrate-cli** (`crates/mssql-pg-migrate-cli/`) - CLI application
+- **dmt-rs** (`crates/dmt-rs/`) - Core library
+- **dmt-rs-cli** (`crates/dmt-rs-cli/`) - CLI application
 
 ### Plugin Architecture (GoF Patterns)
 
@@ -91,7 +112,7 @@ To add a new database driver:
 4. Register type mappers in `DriverCatalog::with_builtins()`
 5. Feature-gate in `Cargo.toml`
 
-### Core Traits (`crates/mssql-pg-migrate/src/core/`)
+### Core Traits (`crates/dmt-rs/src/core/`)
 
 - `SourceReader` - Extract schema, stream rows, parallel reading via PK range splitting
 - `TargetWriter` - Create schema, write data (binary COPY), manage constraints
@@ -109,7 +130,7 @@ Config → Auto-Tuning → Schema Extraction → Connection Pools
 
 ### Key Modules
 
-All paths relative to `crates/mssql-pg-migrate/src/`:
+All paths relative to `crates/dmt-rs/src/`:
 
 | Path | Purpose |
 |------|---------|
@@ -143,12 +164,20 @@ Custom error types in `src/error.rs` with Airflow-compatible exit codes:
 
 | Feature | Crate | Description |
 |---------|-------|-------------|
-| `mysql` | mssql-pg-migrate | MySQL/MariaDB source support via SQLx |
+| `mysql` | dmt-rs | MySQL/MariaDB source support via SQLx |
 | `kerberos` | both | MSSQL Kerberos auth via GSSAPI |
-| `tui` | mssql-pg-migrate-cli | Terminal UI with ratatui |
+| `tui` | dmt-rs-cli | Terminal UI with ratatui |
 
 ## Dependencies Notes
 
 - Uses a **forked tiberius** with 32KB packet size support (42% faster than default)
 - PostgreSQL uses binary COPY protocol for optimal ingestion
 - MySQL support is feature-gated to avoid pulling SQLx when not needed
+- `main.rs` installs the **rustls ring** crypto provider before any TLS work — required because `tokio-postgres-rustls` and `mysql_async` both pull rustls with different defaults. Don't remove this initialization.
+
+## Project Conventions
+
+- Log via `tracing`; do not use `println!` in library code (`crates/dmt-rs/`).
+- Keep modules cohesive: transfer logic in `transfer/`, DB-specific code in `drivers/<db>/`, dialect SQL in `dialect/`.
+- Tests live either inline as `#[cfg(test)]` modules or in each crate's `tests/` directory. Tests that hit real databases should be config-gated so `cargo test` stays runnable without infrastructure.
+- The CLI defines its subcommands as a `clap` enum in `crates/dmt-rs-cli/src/main.rs` — adding a command means extending that enum and dispatching in `run()`.

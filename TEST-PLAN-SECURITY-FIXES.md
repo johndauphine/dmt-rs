@@ -21,7 +21,7 @@ This test plan covers the fixes for critical issues identified in the Gemini cod
 ### 1.2 Integration Tests (Manual)
 | Test ID | Description | Command | Expected Result |
 |---------|-------------|---------|-----------------|
-| PR-04 | Verbose logging doesn't leak password | `RUST_LOG=debug ./mssql-pg-migrate -c config.yaml health-check` | No password in output |
+| PR-04 | Verbose logging doesn't leak password | `RUST_LOG=debug ./dmt-rs -c config.yaml health-check` | No password in output |
 | PR-05 | Error messages don't leak password | Use invalid config | Error doesn't contain password |
 
 ---
@@ -168,8 +168,8 @@ cargo test --lib range_tracker
 cargo test --lib state
 
 # Integration tests
-./mssql-pg-migrate -c config.yaml health-check
-./mssql-pg-migrate -c config.yaml run --dry-run
+./dmt-rs -c config.yaml health-check
+./dmt-rs -c config.yaml run --dry-run
 ```
 
 ### Known Limitations
