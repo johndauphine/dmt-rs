@@ -298,7 +298,7 @@ Target Docker Desktop VM: 20-24 GiB. Distribution:
 | mssql-source | 8 GiB | 6144 MiB | Must hold SO2010 data file in buffer pool |
 | mssql-target | 8 GiB | 6144 MiB | Same, plus room for target writes |
 | pg-source | 3 GiB | n/a (auto) | Holds SO2010 PG copy for pg→* tests |
-| pg-target | 3 GiB | n/a (auto) | Write-side buffers for mssql→pg, pg→pg |
+| pg-target | 3 GiB | n/a (auto) | Write-side buffers for mssql→pg, pg→pg. Bump to 4 GiB for SO2013 or larger LOB workloads — see §8.3. |
 | **Total allocated** | **22 GiB** | | |
 | VM headroom | ~2 GiB free | | Kernel, Docker daemon, slack |
 
@@ -595,16 +595,49 @@ RSS.
 buffer pool to release memory back, *then* apply the `docker update --memory`
 cap.
 
-### 8.3 PostgreSQL target with `<2 GiB` Docker memory cap will drop COPY connections on LOB tables
+### 8.3 PostgreSQL target Docker memory cap must scale with the LOB working set
 
 Symptom: `Writer 0 failed: Transfer failed for table "public"."Posts": COPY finish: connection closed`
 
 Cause: the `nvarchar(max)` Body column generates large COPY buffers. When
 the PG target container hits its memory cap mid-COPY, the kernel kills the
-receiving process and the client sees a closed connection.
+receiving process via SIGKILL (PG log: `server process was terminated by
+signal 9: Killed`). The PG instance then goes through full crash recovery
+(WAL redo, ~30s) before accepting connections again. The client sees a
+closed connection mid-stream.
 
-Fix: set `pg-target --memory=3g` (or higher). 1.5 GiB is too small; 2 GiB
-is tight; 3 GiB is comfortable.
+**The minimum cap depends on the dataset's LOB volume**, not just whether
+LOB columns exist. Confirmed minimums:
+
+| Dataset | LOB volume (Posts.Body) | Minimum pg-target Docker cap |
+|---|---:|---:|
+| **SO2010** | ~6 GB | **3 GiB** (2 GiB crashes) |
+| **SO2013** | ~19 GB | **3 GiB** still works for our aggressive PG config; **2 GiB definitely OOMs** |
+| Larger LOB workloads | 30+ GB | Likely needs **4 GiB+**, untested |
+
+The aggressive baked-in PG config for our `pg-bench` container has
+~1.6 GB of fixed allocations (`shared_buffers=1GB` +
+`maintenance_work_mem=512MB` + `wal_buffers=64MB`), plus per-connection
+`work_mem=256MB`. With 3 parallel writers each potentially using up to
+256 MB, and PG's autovacuum running concurrently, the working set under
+sustained Posts COPY can briefly exceed 2 GiB → cgroup OOM-killer fires.
+
+**Fix**: set `pg-target --memory=3g` for SO2010-sized workloads.
+For SO2013 or any dataset with >10 GB of LOB content, **start at 3 GiB
+and bump to 4 GiB if you see SIGKILL in PG logs**. Verify with:
+
+```bash
+docker logs pg-bench 2>&1 | grep -E "signal 9|terminated|reinitializing"
+```
+
+> **⚠️ When PG crashes mid-COPY, dmt-rs currently *deadlocks* instead of
+> failing the run cleanly with `EXIT_TRANSFER_ERROR`.** The orchestrator
+> opens new sessions to recover but the writer pool error path hangs the
+> remaining workers indefinitely (process alive at 0% CPU, all PG
+> connections idle in `ClientRead` wait). This is a real dmt-rs bug —
+> see the open issue on the dmt-rs repo. The workaround is to size
+> pg-target large enough that PG never OOMs in the first place, which
+> is what this section recommends.
 
 ### 8.4 mssql → mssql requires tuned memory caps
 
