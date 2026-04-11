@@ -6,7 +6,7 @@ mod wizard;
 mod tui;
 
 use clap::{Parser, Subcommand};
-use dmt_rs::{Config, MigrateError, Orchestrator};
+use dmt_rs::{Config, DatabaseType, MigrateError, Orchestrator};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tokio_util::sync::CancellationToken;
@@ -310,6 +310,14 @@ async fn run() -> Result<(), MigrateError> {
         }
 
         Commands::HealthCheck => {
+            // Capture type display names before `config` is moved into Orchestrator.
+            let source_display = DatabaseType::parse(&config.source.r#type)
+                .map(|t| t.display_name())
+                .unwrap_or("Unknown");
+            let target_display = DatabaseType::parse(&config.target.r#type)
+                .map(|t| t.display_name())
+                .unwrap_or("Unknown");
+
             let orchestrator = Orchestrator::new(config).await?;
             let health_result = orchestrator.health_check().await;
             orchestrator.close().await;
@@ -320,7 +328,8 @@ async fn run() -> Result<(), MigrateError> {
             } else {
                 println!("Health Check Results:");
                 println!(
-                    "  Source (MSSQL): {} ({}ms)",
+                    "  Source ({}): {} ({}ms)",
+                    source_display,
                     if result.source_connected {
                         "OK"
                     } else {
@@ -332,7 +341,8 @@ async fn run() -> Result<(), MigrateError> {
                     println!("    Error: {}", err);
                 }
                 println!(
-                    "  Target (PostgreSQL): {} ({}ms)",
+                    "  Target ({}): {} ({}ms)",
+                    target_display,
                     if result.target_connected {
                         "OK"
                     } else {

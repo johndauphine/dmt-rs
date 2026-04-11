@@ -1,7 +1,9 @@
 //! Interactive configuration wizard for creating/editing config files.
 
 use dialoguer::{Confirm, Input, Password, Select};
-use dmt_rs::{Config, MigrationConfig, Orchestrator, SourceConfig, TargetConfig, TargetMode};
+use dmt_rs::{
+    Config, DatabaseType, MigrationConfig, Orchestrator, SourceConfig, TargetConfig, TargetMode,
+};
 use std::path::Path;
 
 /// Result type for wizard operations.
@@ -527,6 +529,13 @@ async fn test_connections(config: &Config) -> WizardResult<()> {
 
     println!("\nTesting connections...");
 
+    let source_display = DatabaseType::parse(&config.source.r#type)
+        .map(|t| t.display_name())
+        .unwrap_or("Unknown");
+    let target_display = DatabaseType::parse(&config.target.r#type)
+        .map(|t| t.display_name())
+        .unwrap_or("Unknown");
+
     // Use a 30-second timeout to prevent hanging indefinitely
     let timeout_duration = Duration::from_secs(30);
 
@@ -556,7 +565,8 @@ async fn test_connections(config: &Config) -> WizardResult<()> {
     match result {
         Ok(health) => {
             println!(
-                "  Source (MSSQL): {} ({}ms)",
+                "  Source ({}): {} ({}ms)",
+                source_display,
                 if health.source_connected {
                     "OK"
                 } else {
@@ -569,7 +579,8 @@ async fn test_connections(config: &Config) -> WizardResult<()> {
             }
 
             println!(
-                "  Target (PostgreSQL): {} ({}ms)",
+                "  Target ({}): {} ({}ms)",
+                target_display,
                 if health.target_connected {
                     "OK"
                 } else {

@@ -42,7 +42,7 @@ impl PostgresReader {
             recycling_method: RecyclingMethod::Fast,
         };
 
-        let ssl_mode = "require";
+        let ssl_mode = config.ssl_mode.as_str();
         let pool = match ssl_mode.to_lowercase().as_str() {
             "disable" => {
                 warn!("PostgreSQL TLS is disabled. Credentials will be transmitted in plaintext.");

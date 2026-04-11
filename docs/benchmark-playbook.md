@@ -4,15 +4,24 @@ A reproducible, self-contained procedure for running the dmt-rs end-to-end
 benchmark across all four `{mssql,pg} × {mssql,pg}` migration directions,
 plus the infrastructure gotchas and cross-hardware prediction table.
 
-Authoring context: this doc was written at the end of a session on an
-**M5 Pro 24 GB** (MacBook) running Docker Desktop with x86_64 emulation for
-MSSQL, targeting a follow-up session on an **M3 Max 36 GB** that will
-validate the predictions in the last table.
+Authoring context: this doc was first written at the end of a session on
+an **M5 Pro 24 GB** (MacBook) running Docker Desktop with x86_64 emulation
+for MSSQL, then revised after a follow-up run on **M3 Max 36 GB** refuted
+the original §2 hypothesis. See [`benchmark-results-m3-max.md`](benchmark-results-m3-max.md)
+for the actual cross-hardware results.
 
 > **Note on scope.** This playbook documents a benchmark harness against
 > real databases, not the unit test suite. `cargo test --all-features`
 > needs nothing beyond a working Rust toolchain. The procedures below
 > are for measuring end-to-end migration throughput on real data.
+
+> **Most important finding from cross-hardware validation**: the dominant
+> factor is **the target database type, not the host chip**. PG targets
+> are storage-bound (COPY flushes dirty pages direct to disk, no meaningful
+> buffer pool effect); MSSQL targets are buffer-pool-bound (dirty pages
+> absorb in RAM, checkpoint amortizes over slow storage). NVMe bandwidth
+> matters roughly as much as RAM size — **not negligible** as this doc
+> originally claimed. See §3 below for the corrected model.
 
 ---
 
@@ -58,40 +67,44 @@ transfer in 3–18 seconds regardless of direction.
 
 ---
 
-## 2. Hardware comparison and M3 Max predictions
+## 2. Hardware comparison
 
-The dmt-rs benchmark workload on Apple Silicon is **memory-bound in the
-Docker VM**, not CPU-bound. MSSQL has no ARM Linux build, so it's always
-running under Rosetta 2 — neither chip can avoid the 2-5× emulation
-penalty. Postgres containers run native ARM (`postgres:16-alpine` has an
-arm64 manifest), so they're not affected by chip choice.
+MSSQL has no ARM Linux build, so it's always running under Rosetta 2
+regardless of chip — neither M5 Pro nor M3 Max can avoid the 2-5×
+emulation penalty. Postgres containers run native ARM64
+(`postgres:16-alpine` has an arm64 manifest), so they're not affected
+by chip choice itself.
 
-| Factor | M5 Pro 24 GB | M3 Max 36 GB | Impact |
+| Factor | M5 Pro 24 GB | M3 Max 36 GB | Impact on this workload |
 |---|---|---|---|
 | Per-core perf | Higher (newer P-cores) | Lower (~5-15%) | Negligible — workload isn't CPU-bound |
 | Core count | 10-12 | 14-16 | Negligible — we `--cpus=4` cap containers |
-| **Available RAM for Docker VM** | **~7.75 GiB** (24 - macOS - apps) | **~20-24 GiB** | **Dominant factor** |
+| **Available RAM for Docker VM** | **~7.75 GiB** (24 - macOS - apps) | **~20-24 GiB** | **Helps MSSQL-target directions (big buffer pool). Minimal impact on PG-target directions.** |
 | Rosetta 2 generation | Latest | 2 generations older | Marginal (~5-10% slower emulation) |
-| NVMe bandwidth | Slightly faster | Slightly slower | Negligible once working set fits in RAM |
+| **NVMe bandwidth** | **Faster** | **~50% slower** (!) | **Dominates PG-target directions and PG→PG.** This was the surprise from the M3 Max run. |
 
-### Predictions for M3 Max 36 GB with Docker Desktop set to 20 GiB
+### The corrected workload model
 
-| Direction | M5 Pro 24 GB | **M3 Max 36 GB predicted** | Main reason |
-|---|---:|---:|---|
-| pg → pg | 16.5s | **~14-16s** | PG is already fast; small Rosetta regression offsets bigger cache |
-| mssql → pg | 43.3s | **~22-28s** | MSSQL source gets 6-8 GiB buffer pool → SO2010 buffer-pool cached → Posts read goes from disk-bound to memory-speed |
-| pg → mssql | 104.8s | **~80-90s** | Target-side dirty page buffer grows; still bottlenecked by tiberius LOB INSERT path |
-| mssql → mssql | 98.6s | **~60-70s** | Both sides can run full-fat without bb8 pool contention |
-| **Catastrophic failure risk** | **Real** (we hit it twice) | **Low** | Whole class of VM-OOM failures goes away |
+> **The dominant factor is the target database type, not the host chip:**
+>
+> - **PG targets** are storage-bound. `COPY` flushes dirty pages direct to
+>   disk; `shared_buffers` helps source reads a little but doesn't mask
+>   target-side writes. Slower NVMe → slower migration, end of story.
+> - **MSSQL targets** are buffer-pool-bound. Dirty pages absorb in RAM and
+>   the dirty page flusher amortizes against slow storage. More RAM → big
+>   win even on slower NVMe.
+> - **Source reads on MSSQL** benefit from the buffer pool once the data
+>   file is warm (the SO2010 `.mdf` is ~9 GB; on a 6 GB `max server memory`
+>   cap, most of Posts' LOB pages fit after warm-up).
+> - **Source reads on PG** pay storage cost on every chunk because PG's
+>   COPY path doesn't warm `shared_buffers` aggressively for sequential
+>   scans.
 
-### Predictions *not* expected to improve materially
-
-- **Posts throughput on pg→mssql** — the ceiling is the tiberius batched
-  INSERT path's LOB handling, not memory or CPU. The `mssql-client` spike
-  from earlier this session identified this as the fundamental limitation.
-  See `docs/mssql-client-spike.md`.
-- **Individual small-table throughput** — the lookup tables (PostTypes,
-  VoteTypes, LinkTypes) are dominated by per-query overhead, not scaling.
+This model predicts every row of the M3 Max results correctly (see
+[`benchmark-results-m3-max.md`](benchmark-results-m3-max.md) §3). The
+*original* §2 of this playbook said "NVMe bandwidth: negligible once
+working set fits in RAM" — that was wrong for PG-target directions
+specifically.
 
 ---
 
@@ -472,7 +485,13 @@ container (port 1434), not `mssql-source`.
 ## 7. Validation
 
 Every successful run writes state to the `_dmt_rs` schema in the target
-database. Verify row integrity:
+database. The schema has **one denormalized table** (`_dmt_rs.table_state`)
+with all run-level fields (`run_id`, `run_started_at`, `run_completed_at`,
+`run_status`, `config_hash`) stored alongside each per-table row — there is
+no separate `migration_runs` table, despite what an earlier version of
+this doc and `docs/tech-specs.md` originally claimed.
+
+Verify row integrity after a run:
 
 ```bash
 # For PostgreSQL targets
@@ -480,9 +499,9 @@ docker exec pg-target psql -U postgres -d dmt_test_target -c "
 SELECT table_name, rows_total, rows_transferred, table_status,
        EXTRACT(EPOCH FROM (table_completed_at - run_started_at))::numeric(10,2) AS t_plus_sec
 FROM _dmt_rs.table_state
-WHERE run_id = (SELECT run_id FROM _dmt_rs.migration_runs
-                WHERE status = 'completed'
-                ORDER BY started_at DESC LIMIT 1)
+WHERE run_id = (SELECT run_id FROM _dmt_rs.table_state
+                WHERE run_status = 'completed'
+                ORDER BY run_started_at DESC LIMIT 1)
 ORDER BY table_completed_at;
 "
 
@@ -491,8 +510,8 @@ docker exec mssql-target /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P 'YourStrong@Passw0rd' -C -d dmt_test_target -Q "
 SELECT table_name, rows_total, rows_transferred, table_status
 FROM _dmt_rs.table_state
-WHERE run_id = (SELECT TOP 1 run_id FROM _dmt_rs.migration_runs
-                WHERE status = 'completed' ORDER BY started_at DESC)
+WHERE run_id = (SELECT TOP 1 run_id FROM _dmt_rs.table_state
+                WHERE run_status = 'completed' ORDER BY run_started_at DESC)
 ORDER BY table_completed_at;
 "
 ```
@@ -592,77 +611,179 @@ conclude a tuning change worked or didn't work from a single run.
 The M3 Max should behave similarly — emulation variance is inherent
 to Rosetta 2 and not chip-gen-specific.
 
+### 8.7 Apple Silicon NVMe bandwidth varies significantly between machines
+
+Don't assume cross-Mac storage parity. The M3 Max in the cross-hardware
+run had NVMe roughly half the speed of the M5 Pro, which moved benchmark
+numbers by 30-60% in the PG-target directions (and was the root cause of
+the original §9 predictions being wrong — see §2). If you're comparing
+results across machines, either measure NVMe bandwidth first or treat
+unexplained regressions as storage-limited until proven otherwise.
+
+### 8.8 Pre-existing Azure SQL Edge volumes are risky to mount into SQL Server 2022
+
+If the host already has an `mssql-bench-data` volume from a prior Azure
+SQL Edge session (the native arm64 image, internal version ~921,
+vintage SQL Server 2017), **do not mount it directly into a
+`mcr.microsoft.com/mssql/server:2022-latest` container**. SQL Server 2022
+will attempt an in-place upgrade of the system databases on first start,
+which can fail with cryptic errors on Edge-specific metadata.
+
+Safe procedure for reusing the data from such a volume:
+
+1. Create a fresh `mssql-source-data` volume and start SQL Server 2022
+   against it, letting it initialize clean system databases.
+2. Run a throwaway Alpine container with the old volume mounted
+   read-only at `/src` and the new volume mounted read-write at `/dst`.
+3. Copy **only** `StackOverflow2010.mdf` and `StackOverflow2010_log.ldf`
+   (not any system DB files), `chown 10001:10001`, `chmod 660`.
+4. Inside the SQL Server 2022 container, run
+   `CREATE DATABASE StackOverflow2010 ... FOR ATTACH`. The version upgrade
+   from 921 → 957 runs incrementally and succeeds in ~5 seconds.
+
+The original Azure SQL Edge volume is never modified and remains as a
+backup. Detailed procedure: see [`benchmark-results-m3-max.md`](benchmark-results-m3-max.md) §5.1.
+
+### 8.9 Phase 4 PK creation is instantaneous on MSSQL targets (not a bug)
+
+When the target is MSSQL, Phase 4 logs lines like:
+
+```
+Created PK on dbo.Votes (10143364 rows) in 0.00s
+Created PK on dbo.Posts (3729195 rows) in 0.01s
+```
+
+These are not real PK creation times. The MSSQL target dialect creates
+primary keys inline as part of `CREATE TABLE`, so the Phase 4 post-load
+step is a no-op for MSSQL. The PK cost is already baked into the
+per-table transfer times reported earlier in the run.
+
+PG targets behave differently: PG's COPY path bypasses constraints, so
+PK creation runs as a real post-load index build in Phase 4 (several
+seconds for Posts/Votes/Comments).
+
+**Consequence for analysis:** `transfer-only vs e2e` duration splits are
+**not directly comparable across target types**. When comparing MSSQL
+and PG targets, compare e2e durations, not transfer-only.
+
 ---
 
-## 9. Predictions to validate on M3 Max 36 GB
+## 9. Cross-hardware results (M5 Pro 24 GB vs M3 Max 36 GB)
 
-Running the procedure above on an M3 Max 36 GB with Docker Desktop at
-20+ GiB should produce results in the following ranges. Log the actual
-numbers and compare.
+A first pass at this section contained predictions that were wrong in
+several directions (not just magnitude — the *sign* of the pg→pg delta
+was backwards). The actual measured numbers from both hosts live here
+as a reference, plus the corrected model that explains them.
 
-| Direction | M5 Pro 24 GB (actual) | **M3 Max 36 GB (predicted)** | Win source |
+Full M3 Max details including per-table timings, cold vs warm runs,
+and new gotchas: [`benchmark-results-m3-max.md`](benchmark-results-m3-max.md).
+
+### Actual results (warm runs, 2026-04-11)
+
+| Direction | M5 Pro 24 GB | M3 Max 36 GB | Delta | Throughput (M3 Max) |
+|---|---:|---:|---:|---:|
+| pg → pg | 16.5s | **25.6s** | **+55% slower** | 755K r/s |
+| mssql → pg | 43.3s | **42.9s** | ~equal | 450K r/s |
+| pg → mssql | 104.8s | **63.8s** | **-39% faster** | 302K r/s |
+| mssql → mssql | 98.6s | **36.4s** | **-63% faster** | 530K r/s |
+| **Total wall time** | **263.2s** | **168.7s** | **-36% overall** | |
+| Catastrophic failure risk | Real (hit 2x) | Low (no failures observed) | | |
+
+The M3 Max wins the overall cross-section by 36%, but **only two of four
+directions actually improved**. PG-target directions regressed because of
+slower NVMe; MSSQL-target directions won big because of larger MSSQL
+buffer pools. This is the corrected model from §2 applied to real data.
+
+### What changed vs the original §9 predictions
+
+The original predictions assumed the workload was "memory-bound in the
+Docker VM" and that more RAM would help every direction. That was wrong:
+
+| Direction | Original prediction | Actual | Why prediction was wrong |
 |---|---:|---:|---|
-| pg → pg | 16.5s (1,168K r/s) | **14-16s (1,200K-1,400K r/s)** | Minor — workload already fast |
-| mssql → pg | 43.3s (445K r/s) | **22-28s (~700K-880K r/s)** | **Big** — MSSQL buffer pool holds Posts |
-| pg → mssql | 104.8-162s (120-185K r/s) | **80-90s (215-240K r/s)** | Modest — tiberius LOB INSERT is still the ceiling |
-| mssql → mssql | 98.6s (196K r/s) | **60-70s (275-320K r/s)** | **Big** — no bb8 contention, fat buffer pools |
-| Catastrophic failure risk | Real (hit twice) | Low | Memory headroom eliminates the failure mode |
+| pg → pg | 14-16s | 25.6s | PG-target is storage-bound, not memory-bound. Slower NVMe on M3 Max dominates; larger RAM doesn't help. |
+| mssql → pg | 22-28s | 42.9s | MSSQL buffer pool wins on the read side but PG target-side writes still hit disk. Wash. |
+| pg → mssql | 80-90s | 63.8s | MSSQL target buffer pool is *more* impactful than predicted — dirty pages absorb in RAM so aggressively that the tiberius LOB INSERT path was never the real ceiling. |
+| mssql → mssql | 60-70s | 36.4s | Both sides benefit from the bigger buffer pools simultaneously; the win compounds. |
 
-Per-table prediction for `mssql → pg` specifically, since that's the most
-informative direction:
+Error pattern: predictions assumed RAM helped source-read and target-write
+equally, but in practice **extra RAM only helps target-write meaningfully
+on MSSQL** (because of the checkpoint-based flush model). PG's COPY path
+bypasses `shared_buffers` aggressively enough that a bigger cache doesn't
+speed up the target side — only the source side, and the gain is small.
 
-| Table | M5 Pro 24 GB | **M3 Max 36 GB predicted** |
-|---|---:|---:|
-| Posts (dominant) | 26.67s (47K r/s per partition) | **~15s (~85K r/s per partition)** |
-| Votes (3 partitions) | 3.24s (1.04M r/s per partition) | **~2s (1.7M r/s per partition)** |
-| Comments (3 partitions) | 5.01s (258K r/s per partition) | **~3s (430K r/s per partition)** |
-| Badges, Users, PostLinks | <1s each | ~same |
+### Per-table detail: `mssql → pg`
 
-### If the predictions are wrong
+| Table | M5 Pro (actual) | M3 Max (actual) | Δ |
+|---|---:|---:|---:|
+| Posts (dominant) | 26.67s | 34.3s | **+28% slower** (slower NVMe on target write hurts) |
+| Comments | 5.01s | 16.4s | **+227% slower** (same reason, scaled by row count) |
+| Votes (3 partitions) | 3.24s | ~4.5s | slower |
+| Badges, Users, PostLinks | <1s each | <1s each | ~equal |
 
-- **Posts speedup smaller than expected**: probably means the MSSQL buffer
-  pool isn't actually caching the LOB pages. Check `max server memory`
-  actually took effect (`SELECT value_in_use FROM sys.configurations
-  WHERE name = 'max server memory (MB)'`) and that the container can grow
-  into its Docker cap. Also verify SO2010's `.mdf` is being read from the
-  mounted volume, not copied into a slower container layer.
-- **pg → mssql regression**: would be surprising. If it happens, it's
-  likely a new tiberius behavior that should be investigated with the
-  `mssql-client` BCP path from the earlier spike (`docs/mssql-client-spike.md`).
-- **mssql → mssql still fails**: Docker Desktop VM size might be lower
-  than you think. Verify with `docker info | grep Memory`. Should be
-  20+ GiB for the budget in section 4.6 to work.
+Posts is still the wall-clock bottleneck on both hosts, but the distribution
+of time inside it shifted: on the M3 Max the read side is actually *faster*
+(MSSQL buffer pool) while the write side is slower (PG target NVMe). On
+the M5 Pro it was the opposite — read was slow (MSSQL hitting disk) and
+write was OK.
+
+### If you're testing on a different host
+
+Use the §2 model to predict before running:
+
+1. **Is the target MSSQL?** You'll benefit from more RAM proportionally to
+   how much of the `max server memory` you can actually give it.
+2. **Is the target PG?** Storage bandwidth matters more than RAM. A newer
+   machine with faster NVMe and less RAM will likely beat an older machine
+   with more RAM but slower storage.
+3. **Is the source MSSQL and the target PG?** Mixed case — depends on
+   which side is heavier. Posts LOB tables shift the bottleneck to the
+   target-write side.
+4. **Emulation overhead** is roughly constant across Apple Silicon
+   generations (Rosetta 2 is mature). Don't expect chip-generation
+   speedups to be large even on MSSQL-heavy directions.
 
 ---
 
-## 10. Reporting results
+## 10. Reporting results from new hosts
 
-When running on the M3 Max, capture:
+If you're running this playbook on a host not already represented in §9,
+capture:
 
-1. The full log file for each direction (at minimum `tail -30` per run).
-2. The per-table state table from section 7.
-3. A summary table comparing actual M3 Max numbers vs the predictions in
-   section 9.
-4. Any gotchas encountered that aren't in section 8 — especially new
-   failure modes unique to the larger VM.
+1. **Per-direction warm numbers** — end-to-end duration and rows/sec for
+   each of the four directions (pg→pg, mssql→pg, pg→mssql, mssql→mssql).
+   Report the *second* (warm) run of each; note cold numbers separately
+   if they differ materially.
+2. **Per-table timings** — at minimum the per-direction `transferred X
+   rows in Y` log lines for the dominant tables (Posts, Comments, Votes).
+   Grep pattern: `grep -a -E "transferred [0-9]+ rows|partitioning into|Phase 4|Migration completed"`.
+3. **State schema validation** — the §7 query against `_dmt_rs.table_state`
+   confirming every table shows `rows_transferred = rows_total` and
+   `table_status = 'completed'`.
+4. **Host profile** — chip, RAM, Docker Desktop VM memory setting, and a
+   rough NVMe bandwidth number if you can measure it (`dd if=...
+   of=/dev/null bs=1M count=1024` is a crude but useful proxy).
+5. **New gotchas** — anything not in §8. Especially new failure modes or
+   container orchestration tricks needed for the environment.
 
-Suggested output location: `docs/benchmark-results-m3-max.md` in a new
-branch (`bench/m3-max-results`), or appended as a section to this
-playbook under "Cross-hardware results". Either way, commit + push so
-future sessions can see the validated numbers.
+Output location: `docs/benchmark-results-<hostname>.md` (following the
+existing `benchmark-results-m3-max.md` pattern), committed to `main`
+alongside a one-row update to §9's cross-hardware results table in this
+file so the summary stays coherent.
 
-If any of the predictions in section 9 are wrong by more than 30%,
-investigate before declaring the result — variance alone rarely accounts
-for that much on the same workload.
+If any reading differs from the §2 target-write-pattern model's
+prediction by more than 30%, investigate before declaring the result —
+that's where the interesting findings live.
 
 ---
 
 ## Related docs
 
-- `docs/tech-specs.md` — supported versions, config schema, exit codes
-- `docs/design.md` — architecture, transfer engine, plugin pattern
-- `docs/philosophy.md` — why the tool exists, what it is NOT
-- `docs/mssql-client-spike.md` — the `mssql-client` alternative driver spike (the real fix for the pg→mssql LOB ceiling)
-- `PERFORMANCE.md` — historical benchmark data from native Linux runs (sub-second counts, 162K-300K+ rows/sec ranges)
-- `BENCHMARKS.md` — Rust vs Go comparison benchmarks
-- `run-all-tests.sh` — the 18-permutation integration test matrix
+- [`benchmark-results-m3-max.md`](benchmark-results-m3-max.md) — actual M3 Max 36 GB results + the corrected target-write-pattern model
+- [`tech-specs.md`](tech-specs.md) — supported versions, config schema, exit codes
+- [`design.md`](design.md) — architecture, transfer engine, plugin pattern
+- [`philosophy.md`](philosophy.md) — why the tool exists, what it is NOT
+- [`mssql-client-spike.md`](mssql-client-spike.md) — the `mssql-client` alternative driver spike
+- `../PERFORMANCE.md` — historical benchmark data from native Linux runs (sub-second counts, 162K-300K+ rows/sec ranges)
+- `../BENCHMARKS.md` — Rust vs Go comparison benchmarks
+- `../run-all-tests.sh` — the 18-permutation integration test matrix
