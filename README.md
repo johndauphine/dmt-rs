@@ -322,16 +322,16 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from datetime import datetime
 
-with DAG('mssql_to_pg_migration', start_date=datetime(2025, 1, 1)) as dag:
+with DAG('dmt_rs_migration', start_date=datetime(2025, 1, 1)) as dag:
 
     migrate = BashOperator(
         task_id='migrate_data',
-        bash_command='''
-            dmt-rs -c /opt/airflow/config/migration.yaml run \
-                --state-file /tmp/{{ run_id }}.state \
-                --output-json \
-                {{ '--resume' if task_instance.try_number > 1 else '' }}
-        ''',
+        # `dmt-rs run` is idempotent: state is stored in the target database's
+        # `_dmt_rs` schema, so on retry re-running the same command
+        # automatically resumes from where the previous attempt left off.
+        # Use `dmt-rs ... resume` only if you want explicit crash-recovery
+        # semantics (it errors if no prior state exists).
+        bash_command='dmt-rs -c /opt/airflow/config/migration.yaml --output-json run',
         do_xcom_push=True,
     )
 ```

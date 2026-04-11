@@ -31,11 +31,11 @@ Additionally, timezone handling has correctness implications that could lead to 
 
 ### Affected Files
 
-- `/Users/john/repos/dmt-rs/crates/dmt-rs/src/config/types.rs:432-438` - Config definition
-- `/Users/john/repos/dmt-rs/crates/dmt-rs/src/state/mod.rs:69-180` - State management
-- `/Users/john/repos/dmt-rs/crates/dmt-rs/src/source/types.rs:149-180` - Column discovery
-- `/Users/john/repos/dmt-rs/crates/dmt-rs/src/transfer/mod.rs:22-30, 1257-1268, 1350-1357` - Filter application
-- `/Users/john/repos/dmt-rs/crates/dmt-rs/src/orchestrator/mod.rs:930-990, 1177-1230` - Orchestration
+- `crates/dmt-rs/src/config/types.rs:432-438` - Config definition
+- `crates/dmt-rs/src/state/mod.rs:69-180` - State management
+- `crates/dmt-rs/src/source/types.rs:149-180` - Column discovery
+- `crates/dmt-rs/src/transfer/mod.rs:22-30, 1257-1268, 1350-1357` - Filter application
+- `crates/dmt-rs/src/orchestrator/mod.rs:930-990, 1177-1230` - Orchestration
 
 ---
 

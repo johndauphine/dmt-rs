@@ -20,7 +20,6 @@ set -e
 CONFIG_FILE="${1:-test-config.yaml}"
 SIGNAL="${2:-TERM}"
 DELAY="${3:-5}"
-STATE_FILE="signal-test-state.json"
 BINARY="./target/release/dmt-rs"
 
 echo "=== Signal Handling Test ==="
@@ -35,12 +34,10 @@ if [ ! -f "$BINARY" ]; then
     cargo build --release
 fi
 
-# Clean up old state file
-rm -f "$STATE_FILE"
-
 # Start migration in background
+# State is persisted in the target DB's `_dmt_rs` schema — no file needed.
 echo "Starting migration..."
-$BINARY -c "$CONFIG_FILE" --state-file "$STATE_FILE" run &
+$BINARY -c "$CONFIG_FILE" run &
 PID=$!
 
 echo "Migration PID: $PID"
@@ -75,17 +72,8 @@ else
     echo "FAIL: Expected exit code 5, got $EXIT_CODE"
 fi
 
-# Check state file was saved
-if [ -f "$STATE_FILE" ]; then
-    echo "PASS: State file was created"
-    echo ""
-    echo "State file contents:"
-    cat "$STATE_FILE" | head -20
-else
-    echo "FAIL: State file was not created"
-fi
-
 echo ""
-echo "=== Cleanup ==="
-rm -f "$STATE_FILE"
+echo "Note: migration state is stored in the target DB's _dmt_rs schema."
+echo "To verify state was persisted, query the target DB:"
+echo "  SELECT run_id, status FROM _dmt_rs.migration_runs ORDER BY started_at DESC LIMIT 1;"
 echo "Done"
