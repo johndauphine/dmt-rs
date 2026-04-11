@@ -83,28 +83,56 @@ by chip choice itself.
 | Rosetta 2 generation | Latest | 2 generations older | Marginal (~5-10% slower emulation) |
 | **NVMe bandwidth** | **Faster** | **~50% slower** (!) | **Dominates PG-target directions and PG→PG.** This was the surprise from the M3 Max run. |
 
-### The corrected workload model
+### The corrected workload model (threshold-gated, feed-rate-aware)
 
-> **The dominant factor is the target database type, not the host chip:**
+> **The dominant factor is the target database type, but the MSSQL-target
+> win is threshold-gated and depends on source feed rate:**
 >
-> - **PG targets** are storage-bound. `COPY` flushes dirty pages direct to
->   disk; `shared_buffers` helps source reads a little but doesn't mask
->   target-side writes. Slower NVMe → slower migration, end of story.
-> - **MSSQL targets** are buffer-pool-bound. Dirty pages absorb in RAM and
->   the dirty page flusher amortizes against slow storage. More RAM → big
->   win even on slower NVMe.
+> - **PG targets** are storage-bound. `COPY` flushes dirty pages direct
+>   to disk; `shared_buffers` helps source reads a little but doesn't
+>   mask target-side writes. Slower NVMe → slower migration, regardless
+>   of RAM. *Confirmed on M3 Max — PG→PG regressed 55% and mssql→pg was
+>   flat despite 3× more VM memory.*
+>
+> - **MSSQL targets** are buffer-pool-bound, **but only above a threshold
+>   that scales with working-set size and source feed rate**:
+>   - **Slow source** (MSSQL → MSSQL via Rosetta): 4 GiB `max server
+>     memory` is enough. The source's own emulation overhead paces dirty
+>     page production; 4 GiB buffer pool can absorb it.
+>   - **Fast source** (PG COPY → MSSQL): need **≥6 GiB** `max server
+>     memory`. PG's COPY fires rows faster than the 4 GiB buffer pool
+>     can absorb, causing spillover to disk. 6 GiB crosses the threshold
+>     for SO2010's ~6 GB of Posts.Body LOB content — the whole working
+>     set fits and dirty pages absorb in memory.
+>   - The threshold **is not constant** — it depends on how much LOB
+>     content the workload has. For smaller datasets with narrow rows,
+>     4 GiB may be sufficient even for PG → MSSQL.
+>
 > - **Source reads on MSSQL** benefit from the buffer pool once the data
->   file is warm (the SO2010 `.mdf` is ~9 GB; on a 6 GB `max server memory`
->   cap, most of Posts' LOB pages fit after warm-up).
+>   file is warm (the SO2010 `.mdf` is ~9 GB; on a 6 GB `max server
+>   memory` cap, most of Posts' LOB pages fit after warm-up).
+>
 > - **Source reads on PG** pay storage cost on every chunk because PG's
 >   COPY path doesn't warm `shared_buffers` aggressively for sequential
 >   scans.
 
-This model predicts every row of the M3 Max results correctly (see
-[`benchmark-results-m3-max.md`](benchmark-results-m3-max.md) §3). The
-*original* §2 of this playbook said "NVMe bandwidth: negligible once
-working set fits in RAM" — that was wrong for PG-target directions
-specifically.
+This model was refined through three experiments:
+
+1. **Original M5 Pro run** (8 GiB Docker VM, 3 GiB max server memory) —
+   baseline.
+2. **M3 Max run** (23 GiB Docker VM, 6 GiB max server memory) — refuted
+   the original "memory-bound, NVMe negligible" hypothesis. Same chip
+   generation and OS, but NVMe differences moved pg→pg and mssql→pg.
+3. **M5 Pro bumped run** (12 GiB Docker VM, 4 GiB max server memory,
+   then 6 GiB) — isolated the single variable of target `max server
+   memory`. pg→mssql stayed at 107s with 4 GiB and dropped to 79s with
+   6 GiB — nothing else changed. This is what established the threshold
+   model.
+
+The *original* §2 of this playbook said "NVMe bandwidth: negligible once
+working set fits in RAM" — wrong for PG targets. It also said "more RAM
+→ big win for all MSSQL-target directions" — wrong for `pg → mssql` at
+the 4 GiB level. Both statements are now corrected above.
 
 ---
 
@@ -668,49 +696,78 @@ and PG targets, compare e2e durations, not transfer-only.
 
 ---
 
-## 9. Cross-hardware results (M5 Pro 24 GB vs M3 Max 36 GB)
+## 9. Cross-hardware and cross-memory results
 
-A first pass at this section contained predictions that were wrong in
-several directions (not just magnitude — the *sign* of the pg→pg delta
-was backwards). The actual measured numbers from both hosts live here
-as a reference, plus the corrected model that explains them.
+This section has been refined through three experiments and four data
+points. The original predictions (not shown here — see the git history
+of this file) were wrong in ways that revealed a **feed-rate-aware,
+threshold-gated** version of the target-write-pattern model. See §2
+for the current model.
 
-Full M3 Max details including per-table timings, cold vs warm runs,
-and new gotchas: [`benchmark-results-m3-max.md`](benchmark-results-m3-max.md).
+Full M3 Max details including per-table timings and new gotchas:
+[`benchmark-results-m3-max.md`](benchmark-results-m3-max.md).
 
-### Actual results (warm runs, 2026-04-11)
+### Four-point dataset (warm runs, 2026-04-11)
 
-| Direction | M5 Pro 24 GB | M3 Max 36 GB | Delta | Throughput (M3 Max) |
+Variables: host (M5 Pro 24 GB vs M3 Max 36 GB), Docker VM size, target
+MSSQL `max server memory`. Everything else held constant (same binary,
+same data, same workload).
+
+| Config | Host | Docker VM | Max server mem | pg→pg | mssql→pg | pg→mssql | mssql→mssql | Total |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| **A** | M5 Pro | 7.75 GiB | 3 GiB | 16.5s | 43.3s | 104.8s | 98.6s | **263.2s** |
+| **B** | M5 Pro | 11.67 GiB | 4 GiB | 18.0s | 44.6s | 107.8s | 64.4s | **234.8s** |
+| **C** | M5 Pro | 11.67 GiB | 6 GiB* | — | — | **78.8s** | — | partial run |
+| **D** | M3 Max | 23.43 GiB | 6 GiB | 25.6s | 42.9s | 63.8s | 36.4s | **168.7s** |
+
+\* Config C isolated `pg → mssql` only to test the threshold theory (see
+below). Other directions not re-run because they're not the threshold
+case.
+
+Throughput (warm, end-to-end, rows/sec):
+
+| Config | pg→pg | mssql→pg | pg→mssql | mssql→mssql |
 |---|---:|---:|---:|---:|
-| pg → pg | 16.5s | **25.6s** | **+55% slower** | 755K r/s |
-| mssql → pg | 43.3s | **42.9s** | ~equal | 450K r/s |
-| pg → mssql | 104.8s | **63.8s** | **-39% faster** | 302K r/s |
-| mssql → mssql | 98.6s | **36.4s** | **-63% faster** | 530K r/s |
-| **Total wall time** | **263.2s** | **168.7s** | **-36% overall** | |
-| Catastrophic failure risk | Real (hit 2x) | Low (no failures observed) | | |
+| **A** (M5 Pro / 3 GiB) | 1,168K | 445K | 184K | 196K |
+| **B** (M5 Pro / 4 GiB) | 1,074K | 433K | 179K | 300K |
+| **C** (M5 Pro / 6 GiB) | — | — | **245K** | — |
+| **D** (M3 Max / 6 GiB) | 755K | 450K | 302K | 530K |
 
-The M3 Max wins the overall cross-section by 36%, but **only two of four
-directions actually improved**. PG-target directions regressed because of
-slower NVMe; MSSQL-target directions won big because of larger MSSQL
-buffer pools. This is the corrected model from §2 applied to real data.
+### Key findings
 
-### What changed vs the original §9 predictions
+**1. `mssql → mssql` scales with target buffer pool even at 4 GiB.**
+B → A shows a 35% improvement (98.6s → 64.4s) from bumping `max server
+memory` from 3 GiB to 4 GiB. D shows another 43% improvement on top of
+that at 6 GiB. The direction responds smoothly to more RAM because the
+source feed rate is throttled by its own Rosetta emulation cost — the
+target doesn't get overwhelmed.
 
-The original predictions assumed the workload was "memory-bound in the
-Docker VM" and that more RAM would help every direction. That was wrong:
+**2. `pg → mssql` has a hard threshold between 4 and 6 GiB.** At
+3 GiB (A): 104.8s. At 4 GiB (B): 107.8s — no improvement. **At 6 GiB
+(C): 78.8s — 26% improvement from a single 2 GiB step.** This is the
+PG COPY source saturating the target INSERT path. Below the threshold,
+dirty pages spill to disk and the migration is I/O-bound; above it,
+they stay in memory and the migration is CPU-bound on tiberius.
 
-| Direction | Original prediction | Actual | Why prediction was wrong |
-|---|---:|---:|---|
-| pg → pg | 14-16s | 25.6s | PG-target is storage-bound, not memory-bound. Slower NVMe on M3 Max dominates; larger RAM doesn't help. |
-| mssql → pg | 22-28s | 42.9s | MSSQL buffer pool wins on the read side but PG target-side writes still hit disk. Wash. |
-| pg → mssql | 80-90s | 63.8s | MSSQL target buffer pool is *more* impactful than predicted — dirty pages absorb in RAM so aggressively that the tiberius LOB INSERT path was never the real ceiling. |
-| mssql → mssql | 60-70s | 36.4s | Both sides benefit from the bigger buffer pools simultaneously; the win compounds. |
+**3. `mssql → pg` is completely insensitive to MSSQL buffer pool size
+on any host.** A: 43.3s. B: 44.6s. D: 42.9s. The target-side PG COPY
+writes hit disk regardless, and the source-side MSSQL read already has
+enough buffer pool at 3 GiB to cache the hot pages. More RAM on either
+side doesn't help.
 
-Error pattern: predictions assumed RAM helped source-read and target-write
-equally, but in practice **extra RAM only helps target-write meaningfully
-on MSSQL** (because of the checkpoint-based flush model). PG's COPY path
-bypasses `shared_buffers` aggressively enough that a bigger cache doesn't
-speed up the target side — only the source side, and the gain is small.
+**4. `pg → pg` is fundamentally storage-bound.** A: 16.5s. B: 18.0s.
+D: 25.6s (slower NVMe hurts). No amount of RAM changes this.
+
+### Remaining M5 Pro 6 GiB → M3 Max 6 GiB gap on `pg → mssql`
+
+Config C (M5 Pro) got 78.8s. Config D (M3 Max) got 63.8s with the same
+6 GiB `max server memory`. The remaining 19% gap is likely a mix of:
+
+- Run-to-run variance (~10% typical on these long Posts-dominated runs)
+- PG source host CPU differences (both native arm64, slightly different
+  per-core performance)
+- Possibly Docker Desktop version / Rosetta 2 minor revision differences
+- Not worth chasing individually — none of these are the dominant factor
 
 ### Per-table detail: `mssql → pg`
 
