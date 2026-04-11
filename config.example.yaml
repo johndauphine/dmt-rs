@@ -1,4 +1,4 @@
-# Example MSSQL to PostgreSQL Migration Configuration (YAML)
+# Example dmt-rs Migration Configuration (YAML)
 #
 # Copy this file to config.yaml and fill in your database credentials.
 # The application auto-detects format based on file extension:

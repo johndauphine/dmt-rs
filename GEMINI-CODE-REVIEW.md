@@ -2,7 +2,7 @@
 
 **Review Date:** 2025-12-25
 **Reviewer:** Gemini CLI via Claude Code
-**Codebase:** dmt-rs-rs
+**Codebase:** dmt-rs
 
 ---
 

@@ -56,8 +56,8 @@ enum ExistingFileAction {
 /// Run the configuration wizard.
 pub async fn run_wizard(output: &Path, advanced: bool, force: bool) -> WizardResult<()> {
     println!();
-    println!("MSSQL to PostgreSQL Migration - Configuration Wizard");
-    println!("=====================================================");
+    println!("dmt-rs - Configuration Wizard");
+    println!("=============================");
     println!();
 
     // Check if file exists and determine action

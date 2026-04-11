@@ -1,5 +1,5 @@
 {
-  "_comment": "Example MSSQL to PostgreSQL Migration Configuration (JSON)",
+  "_comment": "Example dmt-rs Migration Configuration (JSON)",
   "_usage": "Copy to config.json and fill in your database credentials",
 
   "source": {

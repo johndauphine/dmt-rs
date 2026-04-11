@@ -133,7 +133,7 @@ Phase 4: Finalizing (indexes, constraints) - ❌ FAIL
 
 ### Test 1: MSSQL → MSSQL (drop_recreate)
 
-**Config:** `/Users/john/repos/dmt-rs-rs/test-mssql-to-mssql-drop.yaml`
+**Config:** `/Users/john/repos/dmt-rs/test-mssql-to-mssql-drop.yaml`
 
 **Execution Log:**
 ```
@@ -156,7 +156,7 @@ Transaction Commit - ❌ FAIL
 
 ### Test 2: PostgreSQL → MSSQL (drop_recreate)
 
-**Config:** `/Users/john/repos/dmt-rs-rs/test-postgres-to-mssql-drop.yaml`
+**Config:** `/Users/john/repos/dmt-rs/test-postgres-to-mssql-drop.yaml`
 
 **Execution Log:**
 ```
@@ -178,7 +178,7 @@ Transaction Commit - ❌ FAIL
 
 ### Test 3: PostgreSQL → MySQL (drop_recreate) - Prep Data Load
 
-**Config:** `/Users/john/repos/dmt-rs-rs/test-postgres-to-mysql-prep.yaml`
+**Config:** `/Users/john/repos/dmt-rs/test-postgres-to-mysql-prep.yaml`
 
 **Execution Log:**
 ```
@@ -258,18 +258,18 @@ Phase 4: Finalizing (indexes, constraints) - ❌ FAIL
 
 All 12 config files were created successfully:
 
-1. `/Users/john/repos/dmt-rs-rs/test-mssql-to-mssql-drop.yaml`
-2. `/Users/john/repos/dmt-rs-rs/test-mssql-to-mssql-upsert.yaml`
-3. `/Users/john/repos/dmt-rs-rs/test-mssql-to-mysql-drop.yaml`
-4. `/Users/john/repos/dmt-rs-rs/test-mssql-to-mysql-upsert.yaml`
-5. `/Users/john/repos/dmt-rs-rs/test-mysql-to-mssql-drop.yaml`
-6. `/Users/john/repos/dmt-rs-rs/test-mysql-to-mssql-upsert.yaml`
-7. `/Users/john/repos/dmt-rs-rs/test-mysql-to-mysql-drop.yaml`
-8. `/Users/john/repos/dmt-rs-rs/test-mysql-to-mysql-upsert.yaml`
-9. `/Users/john/repos/dmt-rs-rs/test-postgres-to-mssql-drop.yaml`
-10. `/Users/john/repos/dmt-rs-rs/test-postgres-to-mssql-upsert.yaml`
-11. `/Users/john/repos/dmt-rs-rs/test-postgres-to-mysql-drop.yaml`
-12. `/Users/john/repos/dmt-rs-rs/test-postgres-to-mysql-upsert.yaml`
+1. `/Users/john/repos/dmt-rs/test-mssql-to-mssql-drop.yaml`
+2. `/Users/john/repos/dmt-rs/test-mssql-to-mssql-upsert.yaml`
+3. `/Users/john/repos/dmt-rs/test-mssql-to-mysql-drop.yaml`
+4. `/Users/john/repos/dmt-rs/test-mssql-to-mysql-upsert.yaml`
+5. `/Users/john/repos/dmt-rs/test-mysql-to-mssql-drop.yaml`
+6. `/Users/john/repos/dmt-rs/test-mysql-to-mssql-upsert.yaml`
+7. `/Users/john/repos/dmt-rs/test-mysql-to-mysql-drop.yaml`
+8. `/Users/john/repos/dmt-rs/test-mysql-to-mysql-upsert.yaml`
+9. `/Users/john/repos/dmt-rs/test-postgres-to-mssql-drop.yaml`
+10. `/Users/john/repos/dmt-rs/test-postgres-to-mssql-upsert.yaml`
+11. `/Users/john/repos/dmt-rs/test-postgres-to-mysql-drop.yaml`
+12. `/Users/john/repos/dmt-rs/test-postgres-to-mysql-upsert.yaml`
 
 ## Recommendations
 

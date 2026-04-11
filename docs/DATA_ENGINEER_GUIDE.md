@@ -1,6 +1,6 @@
 # dmt-rs: Data Engineer's Guide
 
-A comprehensive technical reference for data engineers using dmt-rs-rs, a high-performance database migration tool supporting MSSQL, PostgreSQL, and MySQL.
+A comprehensive technical reference for data engineers using dmt-rs, a high-performance database migration tool supporting MSSQL, PostgreSQL, and MySQL.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ A comprehensive technical reference for data engineers using dmt-rs-rs, a high-p
 
 ## Overview
 
-dmt-rs-rs is a production-ready data migration tool designed for:
+dmt-rs is a production-ready data migration tool designed for:
 
 - **High throughput**: 160K-200K rows/sec for bulk and upsert operations
 - **Incremental sync**: Efficient `INSERT...ON CONFLICT DO UPDATE` for upserts
@@ -800,4 +800,4 @@ dmt-rs -c config.yaml --progress run 2>&1 | \
 
 ---
 
-*Documentation generated for dmt-rs-rs v1.41.0*
+*Documentation generated for dmt-rs v1.41.0*

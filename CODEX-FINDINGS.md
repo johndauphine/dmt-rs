@@ -1,7 +1,7 @@
 # Codex Findings
 
 ## Scope
-- Reviewed Rust repo `/home/johnd/repos/dmt-rs-rs` against the earlier Go tool `/home/johnd/repos/dmt-rs`.
+- Reviewed Rust repo `/home/johnd/repos/dmt-rs` against the earlier Go tool `/home/johnd/repos/dmt-rs`.
 - Focus: perf gaps, security posture, and correctness for the MSSQL → Postgres CLI.
 
 ## Current state and measurements
