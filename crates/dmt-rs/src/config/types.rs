@@ -101,6 +101,19 @@ impl DatabaseType {
             Self::Mysql => "mysql",
         }
     }
+
+    /// Get the human-readable display name for this database type.
+    ///
+    /// Used in CLI/TUI output where proper casing matters
+    /// (e.g. "MSSQL", "PostgreSQL", "MySQL"). Prefer this over
+    /// [`Self::as_str`] for anything shown to the user.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Mssql => "MSSQL",
+            Self::Postgres => "PostgreSQL",
+            Self::Mysql => "MySQL",
+        }
+    }
 }
 
 /// System resource information for auto-tuning.

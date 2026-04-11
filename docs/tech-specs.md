@@ -283,33 +283,38 @@ Defined in `crates/dmt-rs/src/error.rs`. These are designed for Airflow / Kubern
 
 ## State storage
 
-Migration state is stored *in the target database* under a `_dmt_rs` schema. The schema is in `crates/dmt-rs/src/state/schema.sql` and is initialized automatically on first run.
+Migration state is stored *in the target database* under a `_dmt_rs` schema. The schema is created programmatically by `DbStateBackend::init_schema` (and the MSSQL/MySQL equivalents) in `crates/dmt-rs/src/state/`; see `crates/dmt-rs/src/state/schema.sql` for a documentation copy of the same layout.
 
 ### Tables
 
-```sql
-_dmt_rs.migration_runs
-  run_id          uuid          PRIMARY KEY
-  config_hash     text          HMAC-SHA256 of the config (used to detect drift)
-  started_at      timestamptz
-  completed_at    timestamptz   NULL until finished
-  status          text          'running' | 'completed' | 'failed' | 'cancelled'
+The schema is a **single denormalized table** `_dmt_rs.table_state`. All run-level fields (`run_id`, `run_started_at`, `run_completed_at`, `run_status`, `config_hash`) are stored on every per-table row, indexed on `(run_id, table_name)`. There is no separate `migration_runs` table.
 
+```sql
 _dmt_rs.table_state
-  run_id              uuid       FK -> migration_runs
-  table_name          text
+  run_id              text         NOT NULL
+  config_hash         text         NOT NULL    -- HMAC-SHA256 of the config (detects drift)
+  run_started_at      timestamptz  NOT NULL
+  run_completed_at    timestamptz
+  run_status          text         NOT NULL    -- 'running' | 'completed' | 'failed' | 'cancelled'
+  table_name          text         NOT NULL
+  table_status        text         NOT NULL    -- 'pending' | 'in_progress' | 'completed' | 'failed'
   rows_total          bigint
   rows_transferred    bigint
-  last_pk             bigint     For resume
-  last_sync_timestamp timestamptz  For incremental sync
-  status              text
-  error               text       NULL on success
+  rows_skipped        bigint
+  last_pk             bigint                   -- For resume
+  last_sync_timestamp timestamptz              -- For date-based incremental sync
+  table_completed_at  timestamptz
+  error               text                     -- NULL on success
+  updated_at          timestamptz  NOT NULL
+  PRIMARY KEY (run_id, table_name)
 ```
+
+Indexes: one partial index on `(table_name, table_status, last_sync_timestamp) WHERE table_status = 'completed' AND last_sync_timestamp IS NOT NULL` for fast watermark lookups on incremental sync, and one on `(config_hash, run_started_at DESC)` for latest-run lookups.
 
 ### Behavior
 
 - State backends exist for PostgreSQL (`DbStateBackend`), MSSQL (`MssqlStateBackend`), and MySQL (`MysqlStateBackend`, `mysql` feature).
-- Multi-instance coordination is via row locking on `migration_runs`.
+- Multi-instance coordination is via row locking on `_dmt_rs.table_state`.
 - Config drift is detected via HMAC-SHA256: if the config changes between runs, `resume` fails with `MigrateError::ConfigChanged`. Use a fresh `run` to start over.
 - The schema requires no setup or manual migration — it's idempotently created on first connect.
 

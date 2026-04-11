@@ -1,8 +1,13 @@
 # Benchmark Results — M3 Max 36 GB
 
-Cross-hardware validation of `docs/benchmark-playbook.md` predictions, run on
-**M3 Max 36 GB** (Mac15,10, 14 cores) with Docker Desktop VM at **23.43 GiB**
-on 2026-04-11.
+Cross-hardware validation of [`benchmark-playbook.md`](benchmark-playbook.md)
+predictions, run on **M3 Max 36 GB** (Mac15,10, 14 cores) with Docker Desktop
+VM at **23.43 GiB** on 2026-04-11.
+
+See also: [`benchmark-playbook.md`](benchmark-playbook.md) for the
+reproduction procedure, §2 for the corrected target-write-pattern model
+that was informed by these results, and §9 for the side-by-side summary
+table.
 
 **Headline:** the playbook's §9 predictions were wrong on direction and
 magnitude, but the M3 Max still wins overall by 36% across all four

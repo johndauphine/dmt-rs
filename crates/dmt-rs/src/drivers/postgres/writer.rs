@@ -53,8 +53,12 @@ impl PostgresWriter {
             recycling_method: RecyclingMethod::Fast,
         };
 
-        let ssl_mode = config.ssl_mode.as_str();
-        let pool = match ssl_mode.to_lowercase().as_str() {
+        // Normalize once so both the outer match and build_tls_config see the
+        // same lowercased value — otherwise users setting `ssl_mode: Require`
+        // (or any mixed case) take the TLS branch here but then fail in
+        // build_tls_config's case-sensitive inner match.
+        let ssl_mode = config.ssl_mode.to_lowercase();
+        let pool = match ssl_mode.as_str() {
             "disable" => {
                 warn!("PostgreSQL TLS is disabled. Credentials will be transmitted in plaintext.");
                 let mgr = Manager::from_config(pg_config, tokio_postgres::NoTls, mgr_config);
@@ -64,7 +68,7 @@ impl PostgresWriter {
                     .map_err(|e| MigrateError::pool(e, "creating PostgreSQL target pool"))?
             }
             _ => {
-                let tls_config = Self::build_tls_config(ssl_mode)?;
+                let tls_config = Self::build_tls_config(&ssl_mode)?;
                 let tls_connector = MakeRustlsConnect::new(tls_config);
                 let mgr = Manager::from_config(pg_config, tls_connector, mgr_config);
                 Pool::builder(mgr)
