@@ -21,7 +21,7 @@ for the actual cross-hardware results.
 > buffer pool effect); MSSQL targets are buffer-pool-bound (dirty pages
 > absorb in RAM, checkpoint amortizes over slow storage). NVMe bandwidth
 > matters roughly as much as RAM size — **not negligible** as this doc
-> originally claimed. See §3 below for the corrected model.
+> originally claimed. See §2 below for the corrected model.
 
 ---
 

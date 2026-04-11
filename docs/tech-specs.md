@@ -309,7 +309,7 @@ _dmt_rs.table_state
   PRIMARY KEY (run_id, table_name)
 ```
 
-Indexes: one partial index on `(table_name, table_status, last_sync_timestamp) WHERE status='completed'` for fast watermark lookups on incremental sync, and one on `(config_hash, run_started_at DESC)` for latest-run lookups.
+Indexes: one partial index on `(table_name, table_status, last_sync_timestamp) WHERE table_status = 'completed' AND last_sync_timestamp IS NOT NULL` for fast watermark lookups on incremental sync, and one on `(config_hash, run_started_at DESC)` for latest-run lookups.
 
 ### Behavior
 
