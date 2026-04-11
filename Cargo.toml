@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/mssql-pg-migrate", "crates/mssql-pg-migrate-cli"]
+members = ["crates/dmt-rs", "crates/dmt-rs-cli"]
 
 [workspace.package]
 version = "1.42.2"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
-repository = "https://github.com/johndauphine/mssql-pg-migrate-rs"
+repository = "https://github.com/johndauphine/dmt-rs"
 authors = ["John Dauphine <jdauphine@gmail.com>"]
 
 [workspace.dependencies]

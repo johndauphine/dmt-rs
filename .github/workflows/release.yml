@@ -57,19 +57,19 @@ jobs:
       - name: Prepare binary (Unix)
         if: matrix.os != 'windows-latest'
         run: |
-          cp target/${{ matrix.target }}/release/mssql-pg-migrate mssql-pg-migrate-${{ matrix.name }}
-          chmod +x mssql-pg-migrate-${{ matrix.name }}
+          cp target/${{ matrix.target }}/release/dmt-rs dmt-rs-${{ matrix.name }}
+          chmod +x dmt-rs-${{ matrix.name }}
 
       - name: Prepare binary (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          cp target/${{ matrix.target }}/release/mssql-pg-migrate.exe mssql-pg-migrate-${{ matrix.name }}.exe
+          cp target/${{ matrix.target }}/release/dmt-rs.exe dmt-rs-${{ matrix.name }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mssql-pg-migrate-${{ matrix.name }}
-          path: mssql-pg-migrate-${{ matrix.name }}${{ matrix.ext }}
+          name: dmt-rs-${{ matrix.name }}
+          path: dmt-rs-${{ matrix.name }}${{ matrix.ext }}
 
   release:
     name: Create Release
@@ -90,7 +90,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -type f -name 'mssql-pg-migrate-*' -exec cp {} release/ \;
+          find artifacts -type f -name 'dmt-rs-*' -exec cp {} release/ \;
           cd release
           sha256sum * > checksums.txt
           cat checksums.txt

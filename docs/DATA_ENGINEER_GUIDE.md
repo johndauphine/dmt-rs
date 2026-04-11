@@ -1,6 +1,6 @@
-# mssql-pg-migrate: Data Engineer's Guide
+# dmt-rs: Data Engineer's Guide
 
-A comprehensive technical reference for data engineers using mssql-pg-migrate-rs, a high-performance database migration tool supporting MSSQL, PostgreSQL, and MySQL.
+A comprehensive technical reference for data engineers using dmt-rs, a high-performance database migration tool supporting MSSQL, PostgreSQL, and MySQL.
 
 ## Table of Contents
 
@@ -17,12 +17,12 @@ A comprehensive technical reference for data engineers using mssql-pg-migrate-rs
 
 ## Overview
 
-mssql-pg-migrate-rs is a production-ready data migration tool designed for:
+dmt-rs is a production-ready data migration tool designed for:
 
 - **High throughput**: 160K-200K rows/sec for bulk and upsert operations
 - **Incremental sync**: Efficient `INSERT...ON CONFLICT DO UPDATE` for upserts
 - **Headless operation**: Ideal for Kubernetes, Airflow DAGs, and CI/CD pipelines
-- **Resume capability**: JSON state files enable safe restart after interruption
+- **Resume capability**: Database-backed state in the target's `_dmt_rs` schema enables safe restart after interruption
 - **Memory safety**: Auto-tuning prevents OOM conditions
 
 ### Performance Benchmarks
@@ -311,11 +311,10 @@ target:
 ### Global Options
 
 ```bash
-mssql-pg-migrate [OPTIONS] <COMMAND>
+dmt-rs [OPTIONS] <COMMAND>
 
 Options:
   -c, --config <PATH>           Config file path (default: config.yaml)
-      --state-file <PATH>       State file for resume capability
       --output-json             Output results as JSON
       --log-format <FORMAT>     Log format: text or json (default: text)
       --verbosity <LEVEL>       Log level: debug, info, warn, error
@@ -323,10 +322,15 @@ Options:
       --progress               Print progress as JSON lines
 ```
 
+> **Note:** there is no `--state-file` flag. Migration state is stored in
+> the target database's `_dmt_rs` schema; `run` is idempotent and
+> auto-resumes from that state, and `resume` is a separate subcommand for
+> explicit crash recovery.
+
 ### run - Execute Migration
 
 ```bash
-mssql-pg-migrate -c config.yaml run [OPTIONS]
+dmt-rs -c config.yaml run [OPTIONS]
 
 Options:
       --dry-run              Validate without transferring data
@@ -338,34 +342,35 @@ Options:
 **Example workflows**:
 
 ```bash
-# Basic migration
-mssql-pg-migrate -c config.yaml run
+# Basic migration (idempotent — auto-resumes from target-DB state on retry)
+dmt-rs -c config.yaml run
 
 # Dry run to validate
-mssql-pg-migrate -c config.yaml run --dry-run
-
-# With resume capability
-mssql-pg-migrate -c config.yaml --state-file /tmp/migration.state run
+dmt-rs -c config.yaml run --dry-run
 
 # JSON output for Airflow
-mssql-pg-migrate -c config.yaml --output-json run
+dmt-rs -c config.yaml --output-json run
 ```
 
 ### resume - Continue Interrupted Migration
 
 ```bash
-mssql-pg-migrate -c config.yaml --state-file /tmp/migration.state resume
+dmt-rs -c config.yaml resume
 ```
 
-**State file validation**:
+State is loaded from the target database's `_dmt_rs` schema.
+`resume` errors if no prior state exists (use `run` for the idempotent path
+that creates state on first invocation and resumes on subsequent ones).
+
+**Resume validation**:
 - Config hash must match (prevents resume after config changes)
-- State file must exist and be readable
-- Run ID preserved for continuity
+- A prior run record must exist in the target database
+- Run ID is preserved for continuity
 
 ### validate - Row Count Check
 
 ```bash
-mssql-pg-migrate -c config.yaml validate
+dmt-rs -c config.yaml validate
 ```
 
 Quick check that row counts match between source and target.
@@ -373,7 +378,7 @@ Quick check that row counts match between source and target.
 ### health-check - Connection Test
 
 ```bash
-mssql-pg-migrate -c config.yaml health-check
+dmt-rs -c config.yaml health-check
 ```
 
 Validates connectivity to both source and target databases.
@@ -381,7 +386,7 @@ Validates connectivity to both source and target databases.
 ### init - Interactive Configuration Wizard
 
 ```bash
-mssql-pg-migrate init [OPTIONS]
+dmt-rs init [OPTIONS]
 
 Options:
   -o, --output <PATH>  Output file (default: config.yaml)
@@ -392,7 +397,7 @@ Options:
 ### tui - Terminal UI Mode
 
 ```bash
-mssql-pg-migrate -c config.yaml tui
+dmt-rs -c config.yaml tui
 ```
 
 Launches interactive terminal UI with real-time progress monitoring.
@@ -515,13 +520,15 @@ with DAG(
 
     migrate = BashOperator(
         task_id='incremental_sync',
+        # `run` is idempotent — state lives in the target DB's `_dmt_rs`
+        # schema, so retries automatically resume from where the previous
+        # attempt left off. No --state-file needed.
         bash_command='''
-            mssql-pg-migrate \
+            dmt-rs \
                 -c /opt/airflow/config/migration.yaml \
-                --state-file /tmp/{{ run_id }}.state \
                 --output-json \
                 --progress \
-                {{ 'resume' if task_instance.try_number > 1 else 'run' }}
+                run
         ''',
         do_xcom_push=True,
     )
@@ -529,7 +536,7 @@ with DAG(
     validate = BashOperator(
         task_id='validate_sync',
         bash_command='''
-            mssql-pg-migrate \
+            dmt-rs \
                 -c /opt/airflow/config/migration.yaml \
                 --output-json \
                 validate
@@ -545,24 +552,23 @@ with DAG(
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: mssql-pg-migrate
+  name: dmt-rs
 spec:
   template:
     spec:
       containers:
       - name: migrate
-        image: your-registry/mssql-pg-migrate:latest
+        image: your-registry/dmt-rs:latest
+        # Migration state is stored in the target database's `_dmt_rs`
+        # schema, so no persistent volume for state is required — the pod
+        # can be ephemeral and restarts are safe.
         args:
           - "-c"
           - "/config/migration.yaml"
-          - "--state-file"
-          - "/state/migration.state"
           - "run"
         volumeMounts:
           - name: config
             mountPath: /config
-          - name: state
-            mountPath: /state
         resources:
           requests:
             memory: "2Gi"
@@ -574,9 +580,6 @@ spec:
         - name: config
           configMap:
             name: migration-config
-        - name: state
-          persistentVolumeClaim:
-            claimName: migration-state
       restartPolicy: OnFailure
   backoffLimit: 3
 ```
@@ -587,11 +590,12 @@ spec:
 version: '3.8'
 services:
   migrate:
-    image: your-registry/mssql-pg-migrate:latest
+    image: your-registry/dmt-rs:latest
     volumes:
       - ./config.yaml:/config.yaml:ro
-      - ./state:/state
-    command: ["-c", "/config.yaml", "--state-file", "/state/migration.state", "run"]
+    # State is stored in the target DB's `_dmt_rs` schema, so no
+    # `state` volume is needed. `run` is idempotent and auto-resumes.
+    command: ["-c", "/config.yaml", "run"]
     environment:
       - MSSQL_PASSWORD=${MSSQL_PASSWORD}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -611,14 +615,14 @@ services:
 | 3 | Transfer error | Check logs, may retry |
 | 4 | Validation error | Investigate data issues |
 | 5 | Cancelled | User/signal interruption |
-| 6 | State error | Check state file |
+| 6 | State error | Check the `_dmt_rs` schema in the target database |
 | 7 | IO error | Check disk space, permissions |
 
 ### Signal Handling
 
 - **SIGINT (Ctrl-C)**: Graceful shutdown with configurable timeout
 - **SIGTERM**: Same as SIGINT (Kubernetes pod termination)
-- **State saved**: Current progress written to state file before exit
+- **State saved**: Current progress persisted to the `_dmt_rs` schema in the target database before exit
 
 ---
 
@@ -662,26 +666,28 @@ Error: Connection pool timeout
 Error: Config hash mismatch - cannot resume with different configuration
 ```
 
-**Solution**: Either use the original config or start a new migration (delete state file).
+**Solution**: Either revert to the original config or start a new migration
+(drop the `_dmt_rs` schema in the target database to clear state:
+`DROP SCHEMA _dmt_rs CASCADE;`).
 
 ### Debugging
 
 Enable debug logging:
 
 ```bash
-mssql-pg-migrate -c config.yaml --verbosity debug run
+dmt-rs -c config.yaml --verbosity debug run
 ```
 
 JSON log format for parsing:
 
 ```bash
-mssql-pg-migrate -c config.yaml --log-format json run 2>&1 | jq
+dmt-rs -c config.yaml --log-format json run 2>&1 | jq
 ```
 
 Progress monitoring:
 
 ```bash
-mssql-pg-migrate -c config.yaml --progress run 2>&1 | \
+dmt-rs -c config.yaml --progress run 2>&1 | \
     while read line; do echo "$line" | jq -r '.table + ": " + (.rows_transferred | tostring)'; done
 ```
 
@@ -800,4 +806,4 @@ mssql-pg-migrate -c config.yaml --progress run 2>&1 | \
 
 ---
 
-*Documentation generated for mssql-pg-migrate-rs v1.41.0*
+*Documentation generated for dmt-rs v1.41.0*

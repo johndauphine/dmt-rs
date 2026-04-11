@@ -1,4 +1,4 @@
-# mssql-pg-migrate-rs
+# dmt-rs
 
 High-performance database migration tool written in Rust. Supports MSSQL, PostgreSQL, and MySQL.
 
@@ -40,20 +40,20 @@ Tested with Stack Overflow 2010 dataset (19.3M rows, 10 tables):
 
 ### Download pre-built binaries
 
-Download from [GitHub Releases](https://github.com/johndauphine/mssql-pg-migrate-rs/releases/latest):
+Download from [GitHub Releases](https://github.com/johndauphine/dmt-rs/releases/latest):
 
 | Platform | Architecture | Binary |
 |----------|--------------|--------|
-| Linux | x86_64 | `mssql-pg-migrate-linux-x86_64` |
-| Linux | ARM64 | `mssql-pg-migrate-linux-aarch64` |
-| macOS | Intel | `mssql-pg-migrate-darwin-x86_64` |
-| macOS | Apple Silicon | `mssql-pg-migrate-darwin-aarch64` |
-| Windows | x86_64 | `mssql-pg-migrate-windows-x86_64.exe` |
+| Linux | x86_64 | `dmt-rs-linux-x86_64` |
+| Linux | ARM64 | `dmt-rs-linux-aarch64` |
+| macOS | Intel | `dmt-rs-darwin-x86_64` |
+| macOS | Apple Silicon | `dmt-rs-darwin-aarch64` |
+| Windows | x86_64 | `dmt-rs-windows-x86_64.exe` |
 
 ```bash
 # Linux/macOS
-chmod +x mssql-pg-migrate-*
-./mssql-pg-migrate-linux-x86_64 -c config.yaml run
+chmod +x dmt-rs-*
+./dmt-rs-linux-x86_64 -c config.yaml run
 ```
 
 ### Build from source
@@ -75,42 +75,42 @@ cargo build --release --all-features
 
 ```bash
 # Interactive wizard
-mssql-pg-migrate init
+dmt-rs init
 
 # With advanced options
-mssql-pg-migrate init --advanced
+dmt-rs init --advanced
 
 # Specify output file
-mssql-pg-migrate init -o my-config.yaml
+dmt-rs init -o my-config.yaml
 ```
 
 ### Run migration
 
 ```bash
 # Basic migration
-mssql-pg-migrate -c config.yaml run
+dmt-rs -c config.yaml run
 
 # Dry run (validate without transferring)
-mssql-pg-migrate -c config.yaml run --dry-run
+dmt-rs -c config.yaml run --dry-run
 
 # Resume interrupted migration (state stored in database)
-mssql-pg-migrate -c config.yaml resume
+dmt-rs -c config.yaml resume
 
 # JSON output for Airflow
-mssql-pg-migrate -c config.yaml --output-json run
+dmt-rs -c config.yaml --output-json run
 ```
 
 ### Interactive TUI mode
 
 ```bash
 # Launch terminal UI (requires tui feature)
-mssql-pg-migrate -c config.yaml tui
+dmt-rs -c config.yaml tui
 ```
 
 ### Validate row counts
 
 ```bash
-mssql-pg-migrate -c config.yaml validate
+dmt-rs -c config.yaml validate
 ```
 
 ## Configuration
@@ -229,7 +229,7 @@ The tool automatically discovers the first matching date/timestamp column for ea
 
 ### Database State Storage
 
-Migration state is automatically stored in the target PostgreSQL database (`_mssql_pg_migrate` schema), eliminating the need for external state files:
+Migration state is automatically stored in the target PostgreSQL database (`_dmt_rs` schema), eliminating the need for external state files:
 
 **Benefits:**
 - **Transactional safety** - State updates are atomic with data writes
@@ -240,10 +240,10 @@ Migration state is automatically stored in the target PostgreSQL database (`_mss
 
 **Schema:**
 ```sql
-_mssql_pg_migrate.migration_runs
+_dmt_rs.migration_runs
   - run_id, config_hash, started_at, completed_at, status
 
-_mssql_pg_migrate.table_state
+_dmt_rs.table_state
   - run_id, table_name, rows_total, rows_transferred
   - last_sync_timestamp (for incremental sync)
   - status, error
@@ -253,14 +253,14 @@ _mssql_pg_migrate.table_state
 ```sql
 -- View recent migrations
 SELECT run_id, started_at, status,
-       (SELECT COUNT(*) FROM _mssql_pg_migrate.table_state WHERE run_id = mr.run_id) as tables
-FROM _mssql_pg_migrate.migration_runs mr
+       (SELECT COUNT(*) FROM _dmt_rs.table_state WHERE run_id = mr.run_id) as tables
+FROM _dmt_rs.migration_runs mr
 ORDER BY started_at DESC LIMIT 10;
 
 -- Check table sync timestamps
 SELECT table_name, last_sync_timestamp, rows_transferred, status
-FROM _mssql_pg_migrate.table_state
-WHERE run_id = (SELECT run_id FROM _mssql_pg_migrate.migration_runs ORDER BY started_at DESC LIMIT 1);
+FROM _dmt_rs.table_state
+WHERE run_id = (SELECT run_id FROM _dmt_rs.migration_runs ORDER BY started_at DESC LIMIT 1);
 ```
 
 The state schema is automatically initialized on first run. No configuration or setup required.
@@ -322,16 +322,16 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from datetime import datetime
 
-with DAG('mssql_to_pg_migration', start_date=datetime(2025, 1, 1)) as dag:
+with DAG('dmt_rs_migration', start_date=datetime(2025, 1, 1)) as dag:
 
     migrate = BashOperator(
         task_id='migrate_data',
-        bash_command='''
-            mssql-pg-migrate -c /opt/airflow/config/migration.yaml run \
-                --state-file /tmp/{{ run_id }}.state \
-                --output-json \
-                {{ '--resume' if task_instance.try_number > 1 else '' }}
-        ''',
+        # `dmt-rs run` is idempotent: state is stored in the target database's
+        # `_dmt_rs` schema, so on retry re-running the same command
+        # automatically resumes from where the previous attempt left off.
+        # Use `dmt-rs ... resume` only if you want explicit crash-recovery
+        # semantics (it errors if no prior state exists).
+        bash_command='dmt-rs -c /opt/airflow/config/migration.yaml --output-json run',
         do_xcom_push=True,
     )
 ```
@@ -346,17 +346,17 @@ COPY . .
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 FROM scratch
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/mssql-pg-migrate /
-ENTRYPOINT ["/mssql-pg-migrate"]
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/dmt-rs /
+ENTRYPOINT ["/dmt-rs"]
 ```
 
 Or use the pre-built binary:
 
 ```dockerfile
 FROM alpine:latest
-ADD https://github.com/johndauphine/mssql-pg-migrate-rs/releases/latest/download/mssql-pg-migrate-linux-x86_64 /usr/local/bin/mssql-pg-migrate
-RUN chmod +x /usr/local/bin/mssql-pg-migrate
-ENTRYPOINT ["mssql-pg-migrate"]
+ADD https://github.com/johndauphine/dmt-rs/releases/latest/download/dmt-rs-linux-x86_64 /usr/local/bin/dmt-rs
+RUN chmod +x /usr/local/bin/dmt-rs
+ENTRYPOINT ["dmt-rs"]
 ```
 
 ## License

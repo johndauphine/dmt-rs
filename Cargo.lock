@@ -800,6 +800,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "dmt-rs"
+version = "1.42.2"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "bb8",
+ "bytes",
+ "chrono",
+ "deadpool-postgres",
+ "futures",
+ "glob",
+ "hex",
+ "hmac",
+ "lz4_flex",
+ "mysql_async",
+ "postgres-types",
+ "rust_decimal",
+ "rustls 0.23.35",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "socket2 0.5.10",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tiberius",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "dmt-rs-cli"
+version = "1.42.2"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "chrono",
+ "clap",
+ "crossterm",
+ "dialoguer",
+ "dmt-rs",
+ "fuzzy-matcher",
+ "predicates",
+ "ratatui",
+ "rustls 0.23.35",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1528,70 +1592,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mssql-pg-migrate"
-version = "1.42.1"
-dependencies = [
- "anyhow",
- "async-channel",
- "async-trait",
- "bb8",
- "bytes",
- "chrono",
- "deadpool-postgres",
- "futures",
- "glob",
- "hex",
- "hmac",
- "lz4_flex",
- "mysql_async",
- "postgres-types",
- "rust_decimal",
- "rustls 0.23.35",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "socket2 0.5.10",
- "sysinfo",
- "tempfile",
- "thiserror 2.0.17",
- "tiberius",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "tokio-test",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "mssql-pg-migrate-cli"
-version = "1.42.1"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "chrono",
- "clap",
- "crossterm",
- "dialoguer",
- "fuzzy-matcher",
- "mssql-pg-migrate",
- "predicates",
- "ratatui",
- "rustls 0.23.35",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

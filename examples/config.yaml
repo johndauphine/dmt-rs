@@ -1,4 +1,4 @@
-# Example configuration for mssql-pg-migrate
+# Example configuration for dmt-rs
 # Copy this file and customize for your environment
 
 source:

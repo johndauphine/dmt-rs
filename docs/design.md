@@ -1,6 +1,6 @@
 # Design
 
-This document describes how `mssql-pg-migrate` is built. It complements [`philosophy.md`](philosophy.md) (which explains *why* the tool exists) and [`tech-specs.md`](tech-specs.md) (which lists *what* the tool supports). The audience is contributors who need to understand the architecture before changing it.
+This document describes how `dmt-rs` is built. It complements [`philosophy.md`](philosophy.md) (which explains *why* the tool exists) and [`tech-specs.md`](tech-specs.md) (which lists *what* the tool supports). The audience is contributors who need to understand the architecture before changing it.
 
 For end-user operational guidance see [`DATA_ENGINEER_GUIDE.md`](DATA_ENGINEER_GUIDE.md).
 
@@ -8,7 +8,7 @@ For end-user operational guidance see [`DATA_ENGINEER_GUIDE.md`](DATA_ENGINEER_G
 
 ```
 crates/
-├── mssql-pg-migrate/         Core library — all migration logic lives here
+├── dmt-rs/         Core library — all migration logic lives here
 │   └── src/
 │       ├── core/              Trait definitions, schema types, value types
 │       ├── config/            Configuration loading, validation, auto-tuning
@@ -21,7 +21,7 @@ crates/
 │       ├── source/            Re-exports from core::schema (legacy compat shim)
 │       ├── target/            Re-exports from core (legacy compat shim)
 │       └── error.rs           Custom error types + Airflow-compatible exit codes
-└── mssql-pg-migrate-cli/     CLI binary — argument parsing, wizard, TUI, output
+└── dmt-rs-cli/     CLI binary — argument parsing, wizard, TUI, output
 ```
 
 The library/CLI split exists so other tools can embed the migration engine without pulling in clap, ratatui, or the wizard UI. The CLI is a thin wrapper.
@@ -31,7 +31,7 @@ The library/CLI split exists so other tools can embed the migration engine witho
 Three traits define the entire surface area of database support. Adding a new database engine means implementing these three traits and registering them with the catalog.
 
 ```rust
-// crates/mssql-pg-migrate/src/core/traits.rs
+// crates/dmt-rs/src/core/traits.rs
 
 pub trait SourceReader: Send + Sync {
     async fn extract_schema(&self, schema: &str) -> Result<Vec<Table>>;
@@ -72,7 +72,7 @@ pub trait Dialect {
 The drivers do not use `Box<dyn SourceReader>`. Instead, every driver is wrapped in an enum:
 
 ```rust
-// crates/mssql-pg-migrate/src/drivers/mod.rs
+// crates/dmt-rs/src/drivers/mod.rs
 
 pub enum SourceReaderImpl {
     Mssql(Arc<MssqlReader>),
@@ -206,7 +206,7 @@ State storage is abstracted via the `StateBackend` trait (`state/backend.rs`). I
 - `MssqlStateBackend` — MSSQL targets
 - `MysqlStateBackend` — MySQL targets (feature-gated)
 
-State is stored *in the target database* under a `_mssql_pg_migrate` schema. This is a deliberate design choice — see the rationale in [`philosophy.md`](philosophy.md) under "Idempotent by default":
+State is stored *in the target database* under a `_dmt_rs` schema. This is a deliberate design choice — see the rationale in [`philosophy.md`](philosophy.md) under "Idempotent by default":
 
 - Atomic with data writes (same transaction guarantees)
 - Survives container/pod restarts without external persistent volumes

@@ -1,7 +1,7 @@
 # Migration Test Results - All Database Permutations
 
 **Test Date:** 2026-01-23
-**Binary:** mssql-pg-migrate v1.40.0 (built with --all-features)
+**Binary:** dmt-rs v1.40.0 (built with --all-features)
 **Test System:** 36.0 GB RAM, 14 CPU cores
 **Source Data:** StackOverflow2010 (~19.3M rows, 9 tables)
 
@@ -63,7 +63,7 @@ on server d99acbae5f46 executing  on line 0 (code: 266, state: 2, class: 16)
 
 **Reproduction:**
 ```bash
-./target/release/mssql-pg-migrate -c test-postgres-to-mssql-drop.yaml run
+./target/release/dmt-rs -c test-postgres-to-mssql-drop.yaml run
 ```
 
 **Config Example:**
@@ -112,7 +112,7 @@ BLOB/TEXT column 'Id' used in key specification without a key length
 
 **Reproduction:**
 ```bash
-./target/release/mssql-pg-migrate -c test-postgres-to-mysql-prep.yaml run
+./target/release/dmt-rs -c test-postgres-to-mysql-prep.yaml run
 ```
 
 **Observed Behavior:**
@@ -133,7 +133,7 @@ Phase 4: Finalizing (indexes, constraints) - ❌ FAIL
 
 ### Test 1: MSSQL → MSSQL (drop_recreate)
 
-**Config:** `/Users/john/repos/mssql-pg-migrate-rs/test-mssql-to-mssql-drop.yaml`
+**Config:** `test-mssql-to-mssql-drop.yaml`
 
 **Execution Log:**
 ```
@@ -156,7 +156,7 @@ Transaction Commit - ❌ FAIL
 
 ### Test 2: PostgreSQL → MSSQL (drop_recreate)
 
-**Config:** `/Users/john/repos/mssql-pg-migrate-rs/test-postgres-to-mssql-drop.yaml`
+**Config:** `test-postgres-to-mssql-drop.yaml`
 
 **Execution Log:**
 ```
@@ -178,7 +178,7 @@ Transaction Commit - ❌ FAIL
 
 ### Test 3: PostgreSQL → MySQL (drop_recreate) - Prep Data Load
 
-**Config:** `/Users/john/repos/mssql-pg-migrate-rs/test-postgres-to-mysql-prep.yaml`
+**Config:** `test-postgres-to-mysql-prep.yaml`
 
 **Execution Log:**
 ```
@@ -229,7 +229,7 @@ Phase 4: Finalizing (indexes, constraints) - ❌ FAIL
 - Error code 266 specifically indicates transaction nesting count mismatch
 
 **Likely Code Location:**
-- `crates/mssql-pg-migrate/src/drivers/mssql/writer.rs`
+- `crates/dmt-rs/src/drivers/mssql/writer.rs`
 - Transaction begin/commit logic in prepare_target or schema creation
 
 **Fix Required:**
@@ -246,7 +246,7 @@ Phase 4: Finalizing (indexes, constraints) - ❌ FAIL
 - Current implementation generates: `INDEX(col)` which fails for TEXT columns
 
 **Likely Code Location:**
-- `crates/mssql-pg-migrate/src/drivers/mysql/dialect.rs`
+- `crates/dmt-rs/src/drivers/mysql/dialect.rs`
 - Index creation SQL generation
 
 **Fix Required:**
@@ -258,18 +258,18 @@ Phase 4: Finalizing (indexes, constraints) - ❌ FAIL
 
 All 12 config files were created successfully:
 
-1. `/Users/john/repos/mssql-pg-migrate-rs/test-mssql-to-mssql-drop.yaml`
-2. `/Users/john/repos/mssql-pg-migrate-rs/test-mssql-to-mssql-upsert.yaml`
-3. `/Users/john/repos/mssql-pg-migrate-rs/test-mssql-to-mysql-drop.yaml`
-4. `/Users/john/repos/mssql-pg-migrate-rs/test-mssql-to-mysql-upsert.yaml`
-5. `/Users/john/repos/mssql-pg-migrate-rs/test-mysql-to-mssql-drop.yaml`
-6. `/Users/john/repos/mssql-pg-migrate-rs/test-mysql-to-mssql-upsert.yaml`
-7. `/Users/john/repos/mssql-pg-migrate-rs/test-mysql-to-mysql-drop.yaml`
-8. `/Users/john/repos/mssql-pg-migrate-rs/test-mysql-to-mysql-upsert.yaml`
-9. `/Users/john/repos/mssql-pg-migrate-rs/test-postgres-to-mssql-drop.yaml`
-10. `/Users/john/repos/mssql-pg-migrate-rs/test-postgres-to-mssql-upsert.yaml`
-11. `/Users/john/repos/mssql-pg-migrate-rs/test-postgres-to-mysql-drop.yaml`
-12. `/Users/john/repos/mssql-pg-migrate-rs/test-postgres-to-mysql-upsert.yaml`
+1. `test-mssql-to-mssql-drop.yaml`
+2. `test-mssql-to-mssql-upsert.yaml`
+3. `test-mssql-to-mysql-drop.yaml`
+4. `test-mssql-to-mysql-upsert.yaml`
+5. `test-mysql-to-mssql-drop.yaml`
+6. `test-mysql-to-mssql-upsert.yaml`
+7. `test-mysql-to-mysql-drop.yaml`
+8. `test-mysql-to-mysql-upsert.yaml`
+9. `test-postgres-to-mssql-drop.yaml`
+10. `test-postgres-to-mssql-upsert.yaml`
+11. `test-postgres-to-mysql-drop.yaml`
+12. `test-postgres-to-mysql-upsert.yaml`
 
 ## Recommendations
 

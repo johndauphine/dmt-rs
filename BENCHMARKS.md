@@ -98,13 +98,13 @@ After significant optimizations, Go is **30% faster** for MSSQL→PG upsert (235
 cargo build --release
 
 # MSSQL → PostgreSQL (drop_recreate)
-./target/release/mssql-pg-migrate -c benchmark-config.yaml run
+./target/release/dmt-rs -c benchmark-config.yaml run
 
 # MSSQL → PostgreSQL (upsert)
-./target/release/mssql-pg-migrate -c benchmark-upsert-clean.yaml run
+./target/release/dmt-rs -c benchmark-upsert-clean.yaml run
 
 # PostgreSQL → MSSQL (drop_recreate)
-./target/release/mssql-pg-migrate -c benchmark-pg-to-mssql.yaml run
+./target/release/dmt-rs -c benchmark-pg-to-mssql.yaml run
 ```
 
 ## Configuration

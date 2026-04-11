@@ -498,13 +498,13 @@ source:
 ## Files to Create/Modify
 
 ### New Files
-- `crates/mssql-pg-migrate/src/source/pg_binary.rs` - Binary format parser
+- `crates/dmt-rs/src/source/pg_binary.rs` - Binary format parser
 
 ### Modified Files
-- `crates/mssql-pg-migrate/src/source/postgres.rs` - Add copy_rows_binary method
-- `crates/mssql-pg-migrate/src/source/mod.rs` - Export new module
-- `crates/mssql-pg-migrate/src/transfer/mod.rs` - Use COPY for PG sources
-- `crates/mssql-pg-migrate/Cargo.toml` - Add feature flag
+- `crates/dmt-rs/src/source/postgres.rs` - Add copy_rows_binary method
+- `crates/dmt-rs/src/source/mod.rs` - Export new module
+- `crates/dmt-rs/src/transfer/mod.rs` - Use COPY for PG sources
+- `crates/dmt-rs/Cargo.toml` - Add feature flag
 
 ## Appendix: PostgreSQL Binary Format Spec
 

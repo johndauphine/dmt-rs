@@ -8,7 +8,7 @@
 #   - Valid config file at the path specified
 #
 # Usage:
-#   ./scripts/test-airflow.sh [config-file] [state-file]
+#   ./scripts/test-airflow.sh [config-file]
 #
 # Exit codes:
 #   0 - Success
@@ -23,8 +23,7 @@
 set -e
 
 CONFIG_FILE="${1:-test-config.yaml}"
-STATE_FILE="${2:-state.json}"
-BINARY="./target/release/mssql-pg-migrate"
+BINARY="./target/release/dmt-rs"
 
 MAX_RETRIES=3
 RETRY=0
@@ -32,7 +31,6 @@ BACKOFF=30
 
 echo "=== Airflow Integration Test ==="
 echo "Config: $CONFIG_FILE"
-echo "State: $STATE_FILE"
 echo ""
 
 # Build release binary if needed
@@ -41,14 +39,14 @@ if [ ! -f "$BINARY" ]; then
     cargo build --release
 fi
 
-# Clean up old state file
-rm -f "$STATE_FILE"
+# Note: `run` is idempotent — state lives in the target DB's `_dmt_rs`
+# schema, so retries automatically resume from the previous attempt.
 
 while [ $RETRY -lt $MAX_RETRIES ]; do
     echo "--- Attempt $((RETRY + 1)) of $MAX_RETRIES ---"
 
     set +e
-    $BINARY -c "$CONFIG_FILE" --state-file "$STATE_FILE" --output-json run
+    $BINARY -c "$CONFIG_FILE" --output-json run
     EXIT_CODE=$?
     set -e
 
@@ -83,7 +81,7 @@ while [ $RETRY -lt $MAX_RETRIES ]; do
             exit 0
             ;;
         6)
-            echo "FATAL: State error - check state file"
+            echo "FATAL: State error - check _dmt_rs schema in target DB"
             exit 1
             ;;
         7)
