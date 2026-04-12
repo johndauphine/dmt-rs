@@ -917,11 +917,28 @@ impl Orchestrator {
             }
         });
 
+        // Cap parallel_writers to 1 for MSSQL upsert: MERGE WITH (TABLOCK) acquires
+        // an exclusive table lock, so >1 writer per partition just queues on the lock
+        // while holding pool connections — causing bb8 timeout under load.
+        let configured_writers = self.config.migration.get_write_ahead_writers();
+        let is_mssql_upsert = matches!(self.target, TargetPoolImpl::Mssql(_))
+            && self.config.migration.target_mode == TargetMode::Upsert;
+        let parallel_writers = if is_mssql_upsert && configured_writers > 1 {
+            info!(
+                "Capping parallel_writers to 1 for MSSQL upsert \
+                 (MERGE WITH TABLOCK serializes writers; {} configured)",
+                configured_writers
+            );
+            1
+        } else {
+            configured_writers
+        };
+
         let transfer_config = TransferConfig {
             chunk_size: self.config.migration.get_chunk_size(),
             read_ahead: self.config.migration.get_read_ahead_buffers(),
             parallel_readers: self.config.migration.get_parallel_readers(),
-            parallel_writers: self.config.migration.get_write_ahead_writers(),
+            parallel_writers,
             use_copy_binary: true, // Enable COPY TO BINARY for PostgreSQL sources
             compress_text: self.config.migration.compress_text,
         };
