@@ -542,9 +542,8 @@ impl TransferEngine {
                     match chunk {
                         Some(mut chunk) => {
                             total_query_time += chunk.read_time;
-                            // Track completed ranges for safe resume point calculation.
-                            // Only contiguous ranges from start are considered safe.
-                            range_tracker.add_range(chunk.first_pk, chunk.last_pk);
+                            let first_pk = chunk.first_pk;
+                            let last_pk = chunk.last_pk;
 
                             // Count all rows read for progress tracking
                             let chunk_row_count = chunk.data.len() as i64;
@@ -564,11 +563,22 @@ impl TransferEngine {
                                     partition_id: job.partition_id,
                                 };
 
-                                if write_tx.send(write_job).await.is_err() {
-                                    // Writers have all failed
+                                // Wrap send in select! so a writer failure
+                                // unblocks the dispatcher even if the channel
+                                // buffer is full.
+                                let send_ok = tokio::select! {
+                                    res = write_tx.send(write_job) => res.is_ok(),
+                                    _ = cancel.cancelled() => false,
+                                };
+                                if !send_ok {
                                     break;
                                 }
                             }
+
+                            // Track range only after successful hand-off to
+                            // writers, so the resume point never advances past
+                            // data that wasn't actually queued.
+                            range_tracker.add_range(first_pk, last_pk);
                         }
                         None => break, // reader done
                     }
