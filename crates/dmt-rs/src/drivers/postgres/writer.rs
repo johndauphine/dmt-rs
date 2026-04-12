@@ -454,6 +454,15 @@ impl UpsertWriter for PostgresUpsertWriterAdapter {
             })
             .collect();
 
+        // IS DISTINCT FROM: skip rows where no non-PK column changed.
+        // Uses tuple comparison for concise SQL and planner-friendly evaluation.
+        let table_quoted = quote_ident_unchecked(&self.table);
+        let non_pk_cols: Vec<String> = cols
+            .iter()
+            .filter(|c| !pk_cols.contains(c))
+            .map(|c| quote_ident_unchecked(c))
+            .collect();
+
         let merge_sql = if update_cols.is_empty() {
             format!(
                 "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT ({}) DO NOTHING",
@@ -464,14 +473,22 @@ impl UpsertWriter for PostgresUpsertWriterAdapter {
                 pk_list.join(", ")
             )
         } else {
+            let target_tuple: Vec<String> = non_pk_cols
+                .iter()
+                .map(|c| format!("{}.{}", table_quoted, c))
+                .collect();
+            let excluded_tuple: Vec<String> =
+                non_pk_cols.iter().map(|c| format!("EXCLUDED.{}", c)).collect();
             format!(
-                "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT ({}) DO UPDATE SET {}",
+                "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT ({}) DO UPDATE SET {} WHERE ({}) IS DISTINCT FROM ({})",
                 qualified_target,
                 col_list.join(", "),
                 col_list.join(", "),
                 staging_quoted,
                 pk_list.join(", "),
-                update_cols.join(", ")
+                update_cols.join(", "),
+                target_tuple.join(", "),
+                excluded_tuple.join(", ")
             )
         };
 
@@ -1012,6 +1029,15 @@ impl TargetWriter for PostgresWriter {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // IS DISTINCT FROM: skip rows where no non-PK column changed.
+        // Uses tuple comparison for concise SQL and planner-friendly evaluation.
+        let table_quoted = Self::quote_ident(table)?;
+        let non_pk_cols: Vec<String> = cols
+            .iter()
+            .filter(|c| !pk_cols.contains(c))
+            .map(|c| Self::quote_ident(c))
+            .collect::<Result<Vec<_>>>()?;
+
         let upsert_sql = if update_cols.is_empty() {
             format!(
                 "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT ({}) DO NOTHING",
@@ -1022,14 +1048,22 @@ impl TargetWriter for PostgresWriter {
                 pk_col_list.join(", ")
             )
         } else {
+            let target_tuple: Vec<String> = non_pk_cols
+                .iter()
+                .map(|c| format!("{}.{}", table_quoted, c))
+                .collect();
+            let excluded_tuple: Vec<String> =
+                non_pk_cols.iter().map(|c| format!("EXCLUDED.{}", c)).collect();
             format!(
-                "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT ({}) DO UPDATE SET {}",
+                "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT ({}) DO UPDATE SET {} WHERE ({}) IS DISTINCT FROM ({})",
                 qualified_target,
                 col_list.join(", "),
                 col_list.join(", "),
                 quote_ident_unchecked(&staging_name),
                 pk_col_list.join(", "),
-                update_cols.join(", ")
+                update_cols.join(", "),
+                target_tuple.join(", "),
+                excluded_tuple.join(", ")
             )
         };
 
