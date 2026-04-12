@@ -314,13 +314,37 @@ impl MssqlWriter {
     }
 
     /// Check if a row has strings exceeding bulk insert limit.
+    /// Checks both Text and CompressedText variants (compressed values are
+    /// decompressed before encoding, so the decompressed size matters).
     fn row_has_oversized_strings(row: &[SqlValue<'_>]) -> bool {
         for value in row {
-            if let SqlValue::Text(s) = value {
-                let utf16_len: usize = s.chars().map(|c| c.len_utf16() * 2).sum();
-                if utf16_len > BULK_INSERT_STRING_LIMIT {
-                    return true;
+            let oversized = match value {
+                SqlValue::Text(s) => {
+                    let utf16_len: usize = s.chars().map(|c| c.len_utf16() * 2).sum();
+                    utf16_len > BULK_INSERT_STRING_LIMIT
                 }
+                SqlValue::CompressedText {
+                    original_len,
+                    compressed,
+                    ..
+                } => {
+                    // Fast path: if original UTF-8 length × 2 fits, skip decompression
+                    if *original_len * 2 <= BULK_INSERT_STRING_LIMIT {
+                        false
+                    } else if let Ok(decompressed) =
+                        lz4_flex::decompress_size_prepended(compressed)
+                    {
+                        let s = String::from_utf8_lossy(&decompressed);
+                        let utf16_len: usize = s.chars().map(|c| c.len_utf16() * 2).sum();
+                        utf16_len > BULK_INSERT_STRING_LIMIT
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+            if oversized {
+                return true;
             }
         }
         false
