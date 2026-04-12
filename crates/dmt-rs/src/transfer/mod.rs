@@ -602,19 +602,21 @@ impl TransferEngine {
         // Wait for reader to complete.
         // When a writer failed (cancel is set), the reader will return
         // "write channel closed" because we dropped read_rx — that's a
-        // symptom, not the cause. Skip it so try_join_all surfaces the
-        // real writer error below.
-        let reader_result = reader_handle.await;
-        if !cancel.is_cancelled() {
-            match reader_result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(e),
-                Err(e) => {
-                    return Err(MigrateError::Transfer {
-                        table: table_name.clone(),
-                        message: format!("Reader task failed: {}", e),
-                    })
+        // symptom, not the cause. Suppress that expected error so
+        // try_join_all surfaces the real writer error below.
+        // Always propagate panics regardless of cancel state.
+        match reader_handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                if !cancel.is_cancelled() {
+                    return Err(e);
                 }
+            }
+            Err(e) => {
+                return Err(MigrateError::Transfer {
+                    table: table_name.clone(),
+                    message: format!("Reader task panicked: {}", e),
+                })
             }
         }
 
