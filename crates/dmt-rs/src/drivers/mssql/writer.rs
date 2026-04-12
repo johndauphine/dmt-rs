@@ -945,31 +945,57 @@ async fn ensure_staging_table(
 async fn bulk_insert_to_staging(
     conn: &mut PooledConnection<'_, TiberiusConnectionManager>,
     staging_table: &str,
-    _cols: &[String],
+    cols: &[String],
     rows: &[Vec<SqlValue<'static>>],
 ) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
 
-    let mut bulk_load = conn
-        .bulk_insert(staging_table)
-        .await
-        .map_err(|e| MigrateError::transfer(staging_table, format!("bulk insert init: {}", e)))?;
+    // Split rows: bulk insert for normal rows, INSERT fallback for oversized strings.
+    // Tiberius bulk load has a 65535-byte limit per nvarchar value; rows with larger
+    // strings (e.g., Posts.Body nvarchar(max)) must use parameterized INSERT instead.
+    let mut bulk_rows = Vec::with_capacity(rows.len());
+    let mut oversized_rows = Vec::new();
 
     for row in rows {
-        let mut token_row = TokenRow::new();
-        for value in row {
-            token_row.push(sql_value_to_column_data(value));
+        if MssqlWriter::row_has_oversized_strings(row) {
+            oversized_rows.push(row.clone());
+        } else {
+            bulk_rows.push(row);
         }
-        bulk_load.send(token_row).await.map_err(|e| {
-            MigrateError::transfer(staging_table, format!("bulk insert send: {}", e))
+    }
+
+    if !bulk_rows.is_empty() {
+        let mut bulk_load = conn
+            .bulk_insert(staging_table)
+            .await
+            .map_err(|e| {
+                MigrateError::transfer(staging_table, format!("bulk insert init: {}", e))
+            })?;
+
+        for row in bulk_rows {
+            let mut token_row = TokenRow::new();
+            for value in row {
+                token_row.push(sql_value_to_column_data(value));
+            }
+            bulk_load.send(token_row).await.map_err(|e| {
+                MigrateError::transfer(staging_table, format!("bulk insert send: {}", e))
+            })?;
+        }
+
+        bulk_load.finalize().await.map_err(|e| {
+            MigrateError::transfer(staging_table, format!("bulk insert finalize: {}", e))
         })?;
     }
 
-    bulk_load.finalize().await.map_err(|e| {
-        MigrateError::transfer(staging_table, format!("bulk insert finalize: {}", e))
-    })?;
+    if !oversized_rows.is_empty() {
+        debug!(
+            "Staging INSERT fallback for {} rows with oversized strings",
+            oversized_rows.len()
+        );
+        insert_rows_fallback(conn, staging_table, cols, &oversized_rows).await?;
+    }
 
     Ok(())
 }
