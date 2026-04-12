@@ -41,7 +41,7 @@ const DEADLOCK_RETRY_DELAY_MS: u64 = 200;
 const TDS_MAX_PACKET_SIZE: u32 = 32767;
 
 /// Connection pool timeouts.
-const POOL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+const POOL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(120);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const POOL_MAX_LIFETIME: Duration = Duration::from_secs(1800);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
