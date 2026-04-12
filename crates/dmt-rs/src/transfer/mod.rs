@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 /// Date-based incremental sync filter.
@@ -376,6 +377,10 @@ impl TransferEngine {
             );
         }
 
+        // Per-table cancellation: when any writer fails, this token is cancelled
+        // to break the dispatcher out of its loop and unblock the entire pipeline.
+        let cancel = CancellationToken::new();
+
         // Create channel for read-ahead pipeline
         let (read_tx, read_rx) = mpsc::channel::<RowChunk>(self.config.read_ahead);
 
@@ -439,6 +444,7 @@ impl TransferEngine {
             let pk_cols_clone = pk_cols.clone();
             let target_mode = job.target_mode;
             let partition_id = job.partition_id;
+            let cancel = cancel.clone();
 
             let handle = tokio::spawn(async move {
                 let mut local_write_time = Duration::ZERO;
@@ -484,6 +490,7 @@ impl TransferEngine {
                     };
 
                     if let Err(e) = result {
+                        cancel.cancel();
                         return Err(MigrateError::transfer(
                             table_name_clone.clone(),
                             format!("Writer {} failed: {}", writer_id, e),
@@ -529,32 +536,45 @@ impl TransferEngine {
         // Use a separate receiver for the read channel
         let mut read_rx = read_rx;
 
-        while let Some(mut chunk) = read_rx.recv().await {
-            total_query_time += chunk.read_time;
-            // Track completed ranges for safe resume point calculation.
-            // Only contiguous ranges from start are considered safe.
-            range_tracker.add_range(chunk.first_pk, chunk.last_pk);
+        loop {
+            tokio::select! {
+                chunk = read_rx.recv() => {
+                    match chunk {
+                        Some(mut chunk) => {
+                            total_query_time += chunk.read_time;
+                            // Track completed ranges for safe resume point calculation.
+                            // Only contiguous ranges from start are considered safe.
+                            range_tracker.add_range(chunk.first_pk, chunk.last_pk);
 
-            // Count all rows read for progress tracking
-            let chunk_row_count = chunk.data.len() as i64;
-            if let Some(ref counter) = self.progress_counter {
-                counter.fetch_add(chunk_row_count, Ordering::Relaxed);
-            }
+                            // Count all rows read for progress tracking
+                            let chunk_row_count = chunk.data.len() as i64;
+                            if let Some(ref counter) = self.progress_counter {
+                                counter.fetch_add(chunk_row_count, Ordering::Relaxed);
+                            }
 
-            // Compress text values if enabled (reduces memory in write channel)
-            if self.config.compress_text {
-                chunk.data.compress_text_values();
-            }
+                            // Compress text values if enabled (reduces memory in write channel)
+                            if self.config.compress_text {
+                                chunk.data.compress_text_values();
+                            }
 
-            // Send rows to writers
-            if !chunk.data.is_empty() {
-                let write_job = WriteJob {
-                    data: chunk.data,
-                    partition_id: job.partition_id,
-                };
+                            // Send rows to writers
+                            if !chunk.data.is_empty() {
+                                let write_job = WriteJob {
+                                    data: chunk.data,
+                                    partition_id: job.partition_id,
+                                };
 
-                if write_tx.send(write_job).await.is_err() {
-                    // Writers have all failed
+                                if write_tx.send(write_job).await.is_err() {
+                                    // Writers have all failed
+                                    break;
+                                }
+                            }
+                        }
+                        None => break, // reader done
+                    }
+                }
+                _ = cancel.cancelled() => {
+                    // A writer failed — break to unblock the pipeline
                     break;
                 }
             }
@@ -563,18 +583,28 @@ impl TransferEngine {
         // Get the safe resume point (only contiguous ranges from start)
         let last_pk = range_tracker.safe_resume_point();
 
-        // Close write channel to signal writers to finish
+        // Close channels to unblock the entire pipeline:
+        // - drop(write_tx): writers' recv() returns Err after buffer drains
+        // - drop(read_rx): reader's send() returns Err immediately
         drop(write_tx);
+        drop(read_rx);
 
-        // Wait for reader to complete
-        match reader_handle.await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(e) => {
-                return Err(MigrateError::Transfer {
-                    table: table_name.clone(),
-                    message: format!("Reader task failed: {}", e),
-                })
+        // Wait for reader to complete.
+        // When a writer failed (cancel is set), the reader will return
+        // "write channel closed" because we dropped read_rx — that's a
+        // symptom, not the cause. Skip it so try_join_all surfaces the
+        // real writer error below.
+        let reader_result = reader_handle.await;
+        if !cancel.is_cancelled() {
+            match reader_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(e) => {
+                    return Err(MigrateError::Transfer {
+                        table: table_name.clone(),
+                        message: format!("Reader task failed: {}", e),
+                    })
+                }
             }
         }
 
