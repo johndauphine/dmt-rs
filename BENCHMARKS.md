@@ -2,6 +2,13 @@
 
 Comprehensive benchmark results comparing Rust and Go implementations.
 
+> **Numbers below are from January 2026 and are stale.** A fresh head-to-head
+> covering the full 2 × 2 × 2 matrix (direction × mode × engine) was run on
+> 2026-04-11 against the current Go binary (`v3.54.0-97-g4b174fa`) and
+> dmt-rs commit `86e935f`. See
+> [`docs/benchmark-go-vs-dmt-rs.md`](docs/benchmark-go-vs-dmt-rs.md) for
+> the current data.
+
 ## Test Environment
 
 - **Hardware**: Apple M3 Max, 36GB RAM, 14 CPU cores
