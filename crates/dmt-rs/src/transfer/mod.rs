@@ -339,7 +339,15 @@ impl TransferEngine {
     }
 
     /// Execute a transfer job using parallel read-ahead/write-ahead pipeline.
-    pub async fn execute(&self, job: TransferJob) -> Result<TransferStats> {
+    ///
+    /// The `cancel` token controls pipeline shutdown. When cancelled (either by
+    /// a writer failure within this job or externally by the orchestrator),
+    /// the dispatcher breaks, channels are dropped, and readers/writers wind down.
+    ///
+    /// For partitioned tables, the orchestrator shares a single token across all
+    /// partitions of the same table — so a failure in any partition cancels its
+    /// siblings without waiting for the orchestrator's result-collection loop.
+    pub async fn execute(&self, job: TransferJob, cancel: CancellationToken) -> Result<TransferStats> {
         let table_name = job.table.full_name();
         info!(
             "Starting transfer for {} (mode: {:?}, readers: {}, writers: {})",
@@ -376,10 +384,6 @@ impl TransferEngine {
                 table_name
             );
         }
-
-        // Per-table cancellation: when any writer fails, this token is cancelled
-        // to break the dispatcher out of its loop and unblock the entire pipeline.
-        let cancel = CancellationToken::new();
 
         // Create channel for read-ahead pipeline
         let (read_tx, read_rx) = mpsc::channel::<RowChunk>(self.config.read_ahead);

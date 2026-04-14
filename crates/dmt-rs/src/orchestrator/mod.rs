@@ -919,14 +919,16 @@ impl Orchestrator {
 
         // Cap parallel_writers to 1 for MSSQL upsert: MERGE WITH (TABLOCK) acquires
         // an exclusive table lock, so >1 writer per partition just queues on the lock
-        // while holding pool connections — causing bb8 timeout under load.
+        // while holding pool connections. This is a correctness optimization — TABLOCK
+        // serializes writers at the DB level anyway, so extra writers waste connections.
         let configured_writers = self.config.migration.get_write_ahead_writers();
         let is_mssql_upsert = matches!(self.target, TargetPoolImpl::Mssql(_))
             && self.config.migration.target_mode == TargetMode::Upsert;
         let parallel_writers = if is_mssql_upsert && configured_writers > 1 {
-            info!(
-                "Capping parallel_writers to 1 for MSSQL upsert \
-                 (MERGE WITH TABLOCK serializes writers; {} configured)",
+            warn!(
+                "parallel_writers reduced from {} to 1 for MSSQL upsert \
+                 (MERGE WITH TABLOCK acquires an exclusive table lock, \
+                 additional writers would queue on the lock and waste connections)",
                 configured_writers
             );
             1
@@ -988,6 +990,12 @@ impl Orchestrator {
 
         // Track expected partition counts per table (populated during spawning)
         let mut expected_partitions: HashMap<String, usize> = HashMap::new();
+
+        // Per-table cancellation tokens: when any partition of a table fails,
+        // the shared token is cancelled, which breaks sibling partitions'
+        // dispatchers immediately — no need to wait for the orchestrator's
+        // result-collection loop to detect the failure and abort tasks.
+        let mut table_cancel_tokens: HashMap<String, CancellationToken> = HashMap::new();
 
         // Track sync start times per table (for updating watermark after successful completion)
         let mut table_sync_start_times: HashMap<String, DateTime<Utc>> = HashMap::new();
@@ -1088,6 +1096,12 @@ impl Orchestrator {
                         // Track expected partition count for this table
                         expected_partitions.insert(table_name.clone(), partitions.len());
 
+                        // Create a shared cancellation token for all partitions of this table.
+                        // When any partition's writer fails, it cancels this token, which
+                        // breaks sibling partitions' dispatchers immediately.
+                        let table_cancel = CancellationToken::new();
+                        table_cancel_tokens.insert(table_name.clone(), table_cancel.clone());
+
                         // Update state
                         if let Some(ts) = state.tables.get_mut(&table_name) {
                             ts.status = TaskStatus::InProgress;
@@ -1117,6 +1131,7 @@ impl Orchestrator {
 
                             let engine_clone = engine.clone();
                             let semaphore_clone = semaphore.clone();
+                            let partition_cancel = table_cancel.clone();
                             let partition_name =
                                 format!("{}:p{}", table_name, partition.partition_id);
 
@@ -1124,7 +1139,7 @@ impl Orchestrator {
                                 // Acquire permit inside the task - this allows all jobs to be
                                 // spawned immediately while controlling concurrent execution
                                 let _permit = semaphore_clone.acquire_owned().await.unwrap();
-                                let result = engine_clone.execute(job).await;
+                                let result = engine_clone.execute(job, partition_cancel).await;
                                 (partition_name, result)
                             });
                         }
@@ -1161,6 +1176,11 @@ impl Orchestrator {
                 date_filter: date_filter.clone(),
             };
 
+            // Create a per-table cancellation token (for consistency with partitioned path,
+            // and so the orchestrator can cancel in-progress tables on failure if needed).
+            let table_cancel = CancellationToken::new();
+            table_cancel_tokens.insert(table_name.clone(), table_cancel.clone());
+
             let engine_clone = engine.clone();
             let semaphore_clone = semaphore.clone();
             let job_name = table_name.clone();
@@ -1168,7 +1188,7 @@ impl Orchestrator {
             join_set.spawn(async move {
                 // Acquire permit inside the task for consistent behavior with partitioned tables
                 let _permit = semaphore_clone.acquire_owned().await.unwrap();
-                let result = engine_clone.execute(job).await;
+                let result = engine_clone.execute(job, table_cancel).await;
                 (job_name, result)
             });
         }
@@ -1229,6 +1249,13 @@ impl Orchestrator {
                 }
                 Err(e) => {
                     error!("{}: failed - {}", job_name, e);
+                    // Cancel the table's token so sibling partitions shut down
+                    // immediately. The writer already cancels this from inside
+                    // execute(), but this is a safety net for edge cases (e.g.,
+                    // errors during reader setup before any writer runs).
+                    if let Some(token) = table_cancel_tokens.get(&base_table) {
+                        token.cancel();
+                    }
                     // Preserve first error for this table (don't overwrite if partition already failed)
                     table_errors
                         .entry(base_table.clone())
