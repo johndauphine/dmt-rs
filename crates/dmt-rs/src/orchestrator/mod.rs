@@ -34,6 +34,12 @@ pub struct Orchestrator {
     catalog: DriverCatalog,
     progress_enabled: bool,
     progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
+    /// AI type mapping cache (populated during warm-up).
+    #[cfg(feature = "ai")]
+    ai_cache: Option<std::sync::Arc<crate::ai::TypeCache>>,
+    /// AI provider configuration.
+    #[cfg(feature = "ai")]
+    ai_config: Option<crate::ai::AiConfig>,
 }
 
 /// Result of a migration run.
@@ -305,7 +311,26 @@ impl Orchestrator {
             catalog,
             progress_enabled: false,
             progress_tx: None,
+            #[cfg(feature = "ai")]
+            ai_cache: None,
+            #[cfg(feature = "ai")]
+            ai_config: None,
         })
+    }
+
+    /// Enable AI-powered type mapping using the provided configuration.
+    ///
+    /// This wraps all registered type mappers with an AI fallback layer.
+    /// Unknown types will be resolved via the configured LLM provider
+    /// during the warm-up phase (after schema extraction, before DDL generation).
+    #[cfg(feature = "ai")]
+    pub fn with_ai_config(mut self, ai_config: &crate::ai::AiConfig) -> Self {
+        let cache = std::sync::Arc::new(crate::ai::TypeCache::load(&ai_config.cache_path()));
+        self.catalog.wrap_mappers_with_ai(cache.clone());
+        self.ai_cache = Some(cache);
+        self.ai_config = Some(ai_config.clone());
+        info!("AI type mapping enabled (provider: {:?})", ai_config.provider);
+        self
     }
 
     /// Enable progress reporting to stderr as JSON lines.
@@ -540,6 +565,27 @@ impl Orchestrator {
         info!("Found {} tables to migrate", tables.len());
         let total_rows: i64 = tables.iter().map(|t| t.row_count).sum();
         self.emit_progress("schema_extracted", tables.len(), total_rows);
+
+        // AI warm-up: resolve unknown types via LLM before DDL generation
+        #[cfg(feature = "ai")]
+        if let (Some(ai_config), Some(ai_cache)) = (&self.ai_config, &self.ai_cache) {
+            let source_dialect = self.config.source.r#type.to_lowercase();
+            let target_dialect = self.config.target.r#type.to_lowercase();
+            if let Some(mapper) = self.catalog.get_mapper(&source_dialect, &target_dialect) {
+                // Create a temporary AiTypeMapper just for warm-up scanning
+                let ai_mapper = crate::ai::AiTypeMapper::new(mapper, ai_cache.clone());
+                match crate::ai::create_provider(ai_config) {
+                    Ok(provider) => {
+                        if let Err(e) = ai_mapper.warm_up(&tables, provider.as_ref()).await {
+                            warn!("AI warm-up failed, using static type mappings: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to create AI provider, using static type mappings: {}", e);
+                    }
+                }
+            }
+        }
 
         // Apply auto-tuning now that we know actual table sizes
         let table_stats: Vec<TableStats> = tables

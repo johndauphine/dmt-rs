@@ -26,6 +26,10 @@ struct Cli {
     #[arg(short, long, default_value = "config.yaml")]
     config: PathBuf,
 
+    /// Path to global configuration file (default: ~/.dmt-rs/dmt-rs-config.yaml)
+    #[arg(long)]
+    global_config: Option<PathBuf>,
+
     /// Output JSON result to stdout
     #[arg(long)]
     output_json: bool,
@@ -173,6 +177,20 @@ async fn run() -> Result<(), MigrateError> {
     setup_logging(&cli.verbosity, &cli.log_format)
         .map_err(|e| MigrateError::Config(e.to_string()))?;
 
+    // Load global configuration (AI settings, etc.) from ~/.dmt-rs/dmt-rs-config.yaml
+    // or the path specified by --global-config.
+    #[cfg(feature = "ai")]
+    let global_config = {
+        let global_path = cli.global_config.clone().unwrap_or_else(
+            dmt_rs::ai::GlobalConfig::default_path
+        );
+        let gc = dmt_rs::ai::GlobalConfig::load(&global_path)?;
+        if gc.ai.is_some() {
+            info!("Loaded global config from {:?} (AI enabled)", global_path);
+        }
+        gc
+    };
+
     // Load configuration with initial auto-tuning for connection pool sizes.
     // Will be re-tuned after schema extraction with actual row sizes.
     let mut config = Config::load(&cli.config)?.with_auto_tuning();
@@ -204,6 +222,12 @@ async fn run() -> Result<(), MigrateError> {
 
             // Create orchestrator (automatically initializes database state schema)
             let mut orchestrator = Orchestrator::new(config).await?;
+
+            // Enable AI type mapping if configured
+            #[cfg(feature = "ai")]
+            if let Some(ai_config) = &global_config.ai {
+                orchestrator = orchestrator.with_ai_config(ai_config);
+            }
 
             // Auto-resume from database state if it exists
             // This makes 'run' idempotent and enables incremental sync workflows:

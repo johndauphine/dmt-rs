@@ -41,6 +41,9 @@ pub mod state;
 pub mod target;
 pub mod transfer;
 
+#[cfg(feature = "ai")]
+pub mod ai;
+
 // Re-exports for convenient access
 pub use config::{
     Config, DatabaseType, MigrationConfig, SourceConfig, TableStats, TargetConfig, TargetMode,

@@ -17,6 +17,8 @@ default = []
 kerberos = ["tiberius/integrated-auth-gssapi"]
 # MySQL/MariaDB support via mysql_async (with LOAD DATA LOCAL INFILE)
 mysql = ["dep:mysql_async"]
+# AI-powered type mapping via LLM providers (Anthropic, OpenAI, Ollama, LM Studio)
+ai = ["dep:reqwest", "dep:dirs"]
 
 [dependencies]
 # Async runtime
@@ -87,6 +89,10 @@ lz4_flex = "0.11"
 
 # MySQL/MariaDB driver (optional) - uses mysql_async for LOAD DATA LOCAL INFILE
 mysql_async = { workspace = true, optional = true }
+
+# AI type mapping (optional)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+dirs = { version = "5", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

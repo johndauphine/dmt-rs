@@ -266,6 +266,22 @@ impl DriverCatalog {
             .collect()
     }
 
+    /// Wrap all registered type mappers with AI fallback.
+    ///
+    /// Each existing mapper becomes the inner (static) mapper of an `AiTypeMapper`.
+    /// Unknown types detected by the static mapper will be resolved via AI during
+    /// the warm-up phase.
+    #[cfg(feature = "ai")]
+    pub fn wrap_mappers_with_ai(&mut self, cache: Arc<crate::ai::TypeCache>) {
+        let keys: Vec<(String, String)> = self.type_mappers.keys().cloned().collect();
+        for key in keys {
+            if let Some(inner) = self.type_mappers.remove(&key) {
+                let ai_mapper = crate::ai::AiTypeMapper::new(inner, cache.clone());
+                self.type_mappers.insert(key, Arc::new(ai_mapper));
+            }
+        }
+    }
+
     // =========================================================================
     // Factory methods for creating readers and writers
     // =========================================================================

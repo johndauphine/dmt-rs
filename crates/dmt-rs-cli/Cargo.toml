@@ -16,6 +16,7 @@ default = []
 tui = ["ratatui", "crossterm", "fuzzy-matcher"]
 kerberos = ["dmt-rs/kerberos"]
 mysql = ["dmt-rs/mysql"]
+ai = ["dmt-rs/ai"]
 
 [dependencies]
 dmt-rs = { path = "../dmt-rs" }

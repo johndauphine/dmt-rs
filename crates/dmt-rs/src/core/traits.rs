@@ -374,6 +374,9 @@ pub struct TypeMapping {
     pub is_lossy: bool,
     /// Warning message for lossy mappings.
     pub warning: Option<String>,
+    /// Whether this is a fallback mapping for an unrecognized source type.
+    /// When true, AI type mapping will be attempted if configured.
+    pub is_fallback: bool,
 }
 
 impl TypeMapping {
@@ -383,6 +386,7 @@ impl TypeMapping {
             target_type: target_type.into(),
             is_lossy: false,
             warning: None,
+            is_fallback: false,
         }
     }
 
@@ -392,6 +396,18 @@ impl TypeMapping {
             target_type: target_type.into(),
             is_lossy: true,
             warning: Some(warning.into()),
+            is_fallback: false,
+        }
+    }
+
+    /// Create a fallback mapping for an unrecognized source type.
+    /// AI type mapping will be attempted for these if configured.
+    pub fn fallback(target_type: impl Into<String>, warning: impl Into<String>) -> Self {
+        Self {
+            target_type: target_type.into(),
+            is_lossy: true,
+            warning: Some(warning.into()),
+            is_fallback: true,
         }
     }
 }
