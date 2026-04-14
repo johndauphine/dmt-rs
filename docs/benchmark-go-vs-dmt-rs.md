@@ -61,16 +61,19 @@ previously FAILED due to dmt-rs#97.
 | mssql → mssql | drop_recreate | 227k | 173k |
 | mssql → mssql | upsert (pre-pop) | 136k | 185k |
 
-## dmt-rs Phase F failure mode (historical — fixed by PR #100)
+## dmt-rs Phase F failure mode (historical — fixed by PRs #100 + #102)
 
-> **Update 2026-04-14:** Both upsert-to-MSSQL cells now pass after PR #100
-> capped `parallel_writers` to 1 for MSSQL upsert, and the underlying
-> orchestrator issue (#97) is fixed: per-table `CancellationToken`s are
-> now shared across partitions, so a writer failure in any partition
-> cancels siblings immediately instead of letting them cascade into pool
-> exhaustion. The `parallel_writers` cap to 1 remains as a correctness
-> optimization (MSSQL `MERGE WITH (TABLOCK)` serializes writers at the
-> DB level anyway), not as a workaround.
+> **Update 2026-04-14:** Both upsert-to-MSSQL cells now pass. Two PRs
+> addressed the issue:
+>
+> - **PR #100** capped `parallel_writers` to 1 for MSSQL upsert — a
+>   correctness optimization since `MERGE WITH (TABLOCK)` serializes
+>   writers at the DB level anyway, so extra writers just waste pool
+>   connections.
+> - **PR #102** fixed the underlying orchestrator bug (#97): per-table
+>   `CancellationToken`s are now shared across partitions, so a writer
+>   failure in any partition cancels siblings immediately instead of
+>   cascading into pool exhaustion and data loss.
 
 The original `mssql → mssql` upsert run (pre-fix) failed in 78s with `rc=2`:
 
@@ -97,9 +100,10 @@ alive. Filed as additional context on dmt-rs#97.
 
 1. **dmt-rs wins three cells**: `pg → pg` `drop_recreate` (1.45×),
    `pg → mssql` upsert (1.11×), and `mssql → mssql` upsert (1.36×).
-   The upsert wins are new as of 2026-04-14 after PR #100 fixed the
-   bb8 pool timeout — though the fix is a workaround (serializing
-   writers to 1), not a proper concurrency fix.
+   The upsert wins are new as of 2026-04-14 after PR #100 capped
+   `parallel_writers` to 1 for MSSQL upsert — a correctness
+   optimization since `MERGE WITH (TABLOCK)` serializes writers at
+   the DB level anyway.
 
 2. **dmt-rs ties on `mssql → pg` `drop_recreate`**. Same reason: binary
    COPY into the target carries the workload, source overhead is minor.
