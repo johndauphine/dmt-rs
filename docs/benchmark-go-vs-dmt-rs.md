@@ -11,14 +11,14 @@ This doc replaces the stale numbers in `../BENCHMARKS.md` (January 2026).
 
 | Setting | Value |
 |---|---|
-| Date | 2026-04-11 |
+| Date | 2026-04-11 (cells 1-8), 2026-04-14 (cells 4, 8 rerun) |
 | Host | Apple M5 Pro, 24 GB RAM |
 | Docker Desktop VM | 8 GiB, 2-container layout (one MSSQL + one PG) |
 | MSSQL | SQL Server 2022 under Rosetta 2 emulation, `max server memory = 4096 MB` |
 | PostgreSQL | 16 Alpine native arm64, aggressive write tuning baked into image |
 | Dataset | StackOverflow2010 (Brent Ozar), **19,310,703 rows** across 9 tables |
 | Go binary | `dmt v3.54.0-97-g4b174fa` |
-| dmt-rs binary | release build, commit `86e935f` |
+| dmt-rs binary | release build, commit `86e935f` (cells 1-8); commit `78ceb0f` (cells 4, 8 rerun — includes PR #100 bb8 pool fix and PR #101 oversized string fix) |
 | Methodology | Single-instance source/target on same container per engine; warm cache; targets reset between runs; upsert runs use a populated target (populated via Go in the discarded preload step) |
 
 For the `pg → mssql` and `mssql → pg` cells the source and target are on
@@ -37,14 +37,16 @@ disabled in all configs):
 | 1 | mssql → pg | drop_recreate | 42s | 44.7s | ~tie |
 | 2 | mssql → pg | upsert | 33s | 47.3s | Go 1.43× |
 | 3 | pg → mssql | drop_recreate | 60s | 132.2s | Go 2.20× |
-| 4 | pg → mssql | upsert | 120s | **FAILED** | Go (dmt-rs#97) |
+| 4 | pg → mssql | upsert | 120s | **108.2s** | **dmt-rs 1.11×** |
 | 5 | pg → pg | drop_recreate | 29s | **20s** | **dmt-rs 1.45×** |
 | 6 | pg → pg | upsert | 18s | 66s | Go 3.67× |
 | 7 | mssql → mssql | drop_recreate | 85s | 112s | Go 1.32× |
-| 8 | mssql → mssql | upsert | 142s | **FAILED** | Go (dmt-rs#97) |
+| 8 | mssql → mssql | upsert | 142s | **104.4s** | **dmt-rs 1.36×** |
 
-Cells 1–4 were measured in an earlier session of the same day on the same
-host. Cells 5–8 are from this sweep (`/tmp/dmt-sweep-pgmssql.log`).
+Cells 1–3, 5–7 were measured on 2026-04-11. Cells 4 and 8 were rerun on
+2026-04-14 after PR #100 (cap `parallel_writers` to 1 for MSSQL upsert)
+and PR #101 (oversized string detection in upsert staging) landed — both
+previously FAILED due to dmt-rs#97.
 
 ### Throughput view (rows/sec, end-to-end)
 
@@ -53,18 +55,27 @@ host. Cells 5–8 are from this sweep (`/tmp/dmt-sweep-pgmssql.log`).
 | mssql → pg | drop_recreate | 460k | 432k |
 | mssql → pg | upsert (pre-pop) | 585k | 408k |
 | pg → mssql | drop_recreate | 322k | 146k |
-| pg → mssql | upsert (pre-pop) | 161k | — |
+| pg → mssql | upsert (pre-pop) | 161k | 178k |
 | pg → pg | drop_recreate | 666k | **966k** |
 | pg → pg | upsert (pre-pop) | 1.07M | 293k |
 | mssql → mssql | drop_recreate | 227k | 173k |
-| mssql → mssql | upsert (pre-pop) | 136k | — |
+| mssql → mssql | upsert (pre-pop) | 136k | 185k |
 
-## dmt-rs Phase F failure mode (new data point for #97)
+## dmt-rs Phase F failure mode (historical — fixed by PRs #100 + #102)
 
-The `mssql → mssql` upsert run failed in 78s with `rc=2`. This is a *different*
-failure shape from the earlier `pg → mssql` upsert run, which hung for 56
-minutes with no progress before being killed externally — but both have the
-same root cause.
+> **Update 2026-04-14:** Both upsert-to-MSSQL cells now pass. Two PRs
+> addressed the issue:
+>
+> - **PR #100** capped `parallel_writers` to 1 for MSSQL upsert — a
+>   correctness optimization since `MERGE WITH (TABLOCK)` serializes
+>   writers at the DB level anyway, so extra writers just waste pool
+>   connections.
+> - **PR #102** fixed the underlying orchestrator bug (#97): per-table
+>   `CancellationToken`s are now shared across partitions, so a writer
+>   failure in any partition cancels siblings immediately instead of
+>   cascading into pool exhaustion and data loss.
+
+The original `mssql → mssql` upsert run (pre-fix) failed in 78s with `rc=2`:
 
 ```
 ERROR  Bulk load data was expected but not sent. The batch will be terminated. code=4022
@@ -72,7 +83,7 @@ ERROR  dbo.Users: failed - Transfer failed for table Users:
        Writer 1 failed: Pool error: Timed out in bb8
 ```
 
-What's notable:
+What was notable:
 
 - The error appeared on `dbo.Users` first.
 - **Other tables continued and reported success** (Comments, Votes both
@@ -81,34 +92,33 @@ What's notable:
 - Final tally: `Migration failed: 9 tables, 1,263,563 / 19,310,703 rows in 78.3s`.
 - The process exited cleanly with `rc=2` instead of hanging.
 
-The hang vs. clean-exit asymmetry is interesting — it suggests `#97` has
-multiple branches depending on which writer fails first and which sibling
-tables are still alive. Filed as additional context on dmt-rs#97.
+The hang vs. clean-exit asymmetry suggested `#97` has multiple branches
+depending on which writer fails first and which sibling tables are still
+alive. Filed as additional context on dmt-rs#97.
 
 ## Patterns
 
-1. **dmt-rs wins exactly one cell**: `pg → pg` `drop_recreate`. Pure binary
-   COPY both ends, no MSSQL involvement, no upsert chunking. Here dmt-rs
-   is 1.45× faster than Go (20s vs 29s) — the *only* configuration where
-   it beats Go.
+1. **dmt-rs wins three cells**: `pg → pg` `drop_recreate` (1.45×),
+   `pg → mssql` upsert (1.11×), and `mssql → mssql` upsert (1.36×).
+   The upsert wins are new as of 2026-04-14 after PR #100 capped
+   `parallel_writers` to 1 for MSSQL upsert — a correctness
+   optimization since `MERGE WITH (TABLOCK)` serializes writers at
+   the DB level anyway.
 
 2. **dmt-rs ties on `mssql → pg` `drop_recreate`**. Same reason: binary
    COPY into the target carries the workload, source overhead is minor.
 
-3. **Every cell touching MSSQL writes** (`pg → mssql`, `mssql → mssql`,
-   both modes) is dmt-rs's loss zone. The forked tiberius batched-INSERT
-   path is the ceiling. Confirmed across two source engines and two
-   target modes — this isn't a config artifact.
+3. **MSSQL `drop_recreate` writes** (`pg → mssql`, `mssql → mssql`) are
+   dmt-rs's loss zone. The forked tiberius batched-INSERT path is the
+   ceiling. Confirmed across two source engines — this isn't a config
+   artifact.
 
-4. **Every upsert-to-MSSQL fails** in dmt-rs (2 / 2 attempts). dmt-rs#97
-   is reproducible across both source engines.
-
-5. **`pg → pg` upsert is 3.67× slower in dmt-rs** even with MSSQL out of
+4. **`pg → pg` upsert is 3.67× slower in dmt-rs** even with MSSQL out of
    the picture. Go's `pg → pg` upsert is *faster* than its `pg → pg`
    `drop_recreate` (18s vs 29s) because pre-populated targets allow `IS
    DISTINCT FROM` change detection to skip unchanged rows. dmt-rs's
    upsert codepath does not exploit this.
-   **New finding worth investigating** — the MSSQL bottleneck is not the
+   **Still worth investigating** — the MSSQL bottleneck is not the
    only thing capping dmt-rs's upsert performance; the
    `INSERT … ON CONFLICT DO UPDATE` chunking codepath itself is slow
    independently of the tiberius bottleneck.
@@ -151,28 +161,32 @@ underlying `COPY` plumbing.
 
 ## What this means
 
-dmt-rs is **competitive on PG-target work** (1 win, 1 tie) and **slow on
-MSSQL-target work** (4 losses, 2 hard failures). The only configuration
-where dmt-rs beats Go is the case where everything goes right: a fast
-source, a fast target, no MSSQL anywhere, and no upsert chunking.
+dmt-rs **wins 3 cells** (pg→pg drop_recreate, pg→mssql upsert,
+mssql→mssql upsert), **ties 1** (mssql→pg drop_recreate), and **loses
+4** (the remaining cells). The scorecard improved from 1-1-6 to 3-1-4
+after PR #100 unblocked the two upsert-to-MSSQL cells.
 
-Two known issues account for almost all of the lost ground:
+Two known issues account for the remaining lost ground:
 
-1. **tiberius batched INSERT throughput** — caps every direction targeting
-   MSSQL at roughly half of Go. Replacing or supplementing tiberius is
-   tracked in `mssql-client-spike.md`.
-2. **dmt-rs#97 — orchestrator deadlock / data-loss on writer failure**
-   — currently makes dmt-rs unusable for upsert-to-MSSQL workloads at
-   any scale, since the bb8 writer pool reliably times out and the
-   orchestrator either hangs or silently drops 93% of the data.
-
-A third, smaller issue surfaced in this run:
-
-3. **dmt-rs upsert codepath is slow even on PG → PG.** The
+1. **tiberius batched INSERT throughput** — caps `drop_recreate`
+   directions targeting MSSQL at roughly half of Go. Replacing or
+   supplementing tiberius is tracked in `mssql-client-spike.md`.
+2. **dmt-rs upsert codepath is slow on PG → PG.** The
    `INSERT … ON CONFLICT DO UPDATE` chunking does not benefit from the
    `IS DISTINCT FROM` skip-unchanged optimization that Go's upsert path
-   uses. This is independent of issues #1 and #2 above and worth a
-   separate investigation.
+   uses. This is independent of issue #1 and worth a separate
+   investigation.
+
+One issue has been **fully fixed**:
+
+3. **dmt-rs#97 — orchestrator deadlock / data-loss on writer failure**
+   — The orchestrator now shares per-table `CancellationToken`s across
+   partitions, so a writer failure in any partition immediately cancels
+   sibling partitions' dispatchers. Previously, sibling partitions
+   continued running unaware, cascading into pool exhaustion and data
+   loss. The `parallel_writers` cap to 1 for MSSQL upsert (PR #100) is
+   retained as a correctness optimization (TABLOCK serializes at the DB
+   level), not a workaround.
 
 ## Reproduction
 
@@ -192,7 +206,7 @@ To reproduce on a fresh host:
 4. Generate matching YAML pairs (Go and dmt-rs) for each of the 8 cells.
 5. Reset target between every measured run; populate via Go for upsert
    measured runs to avoid dmt-rs state contamination.
-6. Watch for #97 on dmt-rs upsert-to-MSSQL — be prepared to kill if hung.
+6. All 8 cells should complete without intervention (dmt-rs#97 is fixed).
 
 ## Related docs
 
