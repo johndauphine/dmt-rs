@@ -200,11 +200,11 @@ SELECT * FROM numbered WHERE __rn >= {} AND __rn <= {}"#,
     fn ai_type_guidance(&self) -> Option<&str> {
         Some(
             "Microsoft SQL Server characteristics: \
-             nvarchar/nchar store Unicode (UTF-16), varchar/char do not. \
-             Always prefer nvarchar over varchar for text data to preserve \
-             Unicode characters. datetime2 has higher precision than datetime. \
-             sql_variant can hold multiple types. hierarchyid and geography \
-             are CLR-based UDT types. XML is a native type with query support.",
+             nvarchar/nchar store Unicode (UTF-16), varchar/char store \
+             single-byte encodings only. datetime2 has nanosecond precision, \
+             datetime has 3.33ms precision. sql_variant can hold multiple \
+             types. hierarchyid and geography are CLR-based UDT types. \
+             XML is a native type with XQuery support.",
         )
     }
 }

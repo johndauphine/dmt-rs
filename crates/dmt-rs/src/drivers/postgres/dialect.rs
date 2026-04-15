@@ -176,9 +176,10 @@ SELECT * FROM numbered WHERE __rn >= {} AND __rn <= {}"#,
              text and varchar are interchangeable (text has no performance penalty). \
              timestamptz stores timezone-aware datetimes, timestamp does not. \
              User-defined types include enums (constrained text values), domains \
-             (type aliases with constraints), and composites. Enums and domains \
-             are text-like. Array types use bracket syntax (e.g., integer[]). \
-             UUID is a native type. JSONB is a native binary JSON type.",
+             (type aliases wrapping any base type, often text but can be numeric \
+             or other types), and composites. Array types use bracket syntax \
+             (e.g., integer[]). UUID is a native type. JSONB is a native binary \
+             JSON type.",
         )
     }
 }
