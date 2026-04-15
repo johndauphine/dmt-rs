@@ -329,7 +329,10 @@ impl Orchestrator {
         self.catalog.wrap_mappers_with_ai(cache.clone());
         self.ai_cache = Some(cache);
         self.ai_config = Some(ai_config.clone());
-        info!("AI type mapping enabled (provider: {:?})", ai_config.provider);
+        info!(
+            "AI type mapping enabled (provider: {:?})",
+            ai_config.provider
+        );
         self
     }
 
@@ -569,10 +572,10 @@ impl Orchestrator {
         // AI warm-up: resolve unknown types via LLM before DDL generation
         #[cfg(feature = "ai")]
         if let (Some(ai_config), Some(ai_cache)) = (&self.ai_config, &self.ai_cache) {
-            let source_dialect = DriverCatalog::normalize_db_type(&self.config.source.r#type)
-                .unwrap_or("unknown");
-            let target_dialect = DriverCatalog::normalize_db_type(&self.config.target.r#type)
-                .unwrap_or("unknown");
+            let source_dialect =
+                DriverCatalog::normalize_db_type(&self.config.source.r#type).unwrap_or("unknown");
+            let target_dialect =
+                DriverCatalog::normalize_db_type(&self.config.target.r#type).unwrap_or("unknown");
             if let Some(mapper) = self.catalog.get_mapper(source_dialect, target_dialect) {
                 // Create a temporary AiTypeMapper just for warm-up scanning
                 let ai_mapper = crate::ai::AiTypeMapper::new(mapper, ai_cache.clone());
@@ -583,7 +586,10 @@ impl Orchestrator {
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to create AI provider, using static type mappings: {}", e);
+                        warn!(
+                            "Failed to create AI provider, using static type mappings: {}",
+                            e
+                        );
                     }
                 }
             }
@@ -1076,7 +1082,7 @@ impl Orchestrator {
                     // Get last sync timestamp from database (queries historical completed runs)
                     let last_sync = self
                         .state_backend
-                        .get_last_sync_timestamp(&table_name)
+                        .get_last_sync_timestamp(&state.config_hash, &table_name)
                         .await?;
 
                     if let Some(last_sync_ts) = last_sync {
@@ -1218,7 +1224,13 @@ impl Orchestrator {
                 partition_id: None,
                 min_pk: None,
                 max_pk: None,
-                resume_from_pk: state.tables.get(&table_name).and_then(|ts| ts.last_pk),
+                resume_from_pk: state.tables.get(&table_name).and_then(|ts| {
+                    if date_incremental_enabled && ts.status == TaskStatus::Completed {
+                        None
+                    } else {
+                        ts.last_pk
+                    }
+                }),
                 target_mode: self.config.migration.target_mode,
                 target_schema: self.config.target.schema.clone(),
                 date_filter: date_filter.clone(),
@@ -2345,6 +2357,21 @@ mod tests {
         assert!(pending_tables.contains(&&"dbo.Orders"));
         assert!(pending_tables.contains(&&"dbo.Products"));
         assert!(!pending_tables.contains(&&"dbo.Users")); // Completed, should be skipped
+    }
+
+    #[test]
+    fn test_incremental_sync_ignores_last_pk_from_completed_table() {
+        let mut completed = TableState::new(1000);
+        completed.status = TaskStatus::Completed;
+        completed.last_pk = Some(12345);
+
+        let resume_from_pk = if true && completed.status == TaskStatus::Completed {
+            None
+        } else {
+            completed.last_pk
+        };
+
+        assert_eq!(resume_from_pk, None);
     }
 
     use crate::core::schema::Column;

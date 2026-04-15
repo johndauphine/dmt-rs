@@ -75,8 +75,13 @@ pub trait StateBackend: Send + Sync {
     ///
     /// # Arguments
     ///
+    /// * `config_hash` - SHA256 hash of the migration configuration
     /// * `table_name` - Full table name (schema.table)
-    async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>>;
+    async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>>;
 
     /// Get the backend type name for logging/debugging.
     fn backend_type(&self) -> &'static str;

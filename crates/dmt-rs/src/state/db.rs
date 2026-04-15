@@ -228,7 +228,11 @@ impl DbStateBackend {
 
     /// Get the last sync timestamp for a specific table (for incremental sync).
     /// Returns the most recent completed run's timestamp for this table.
-    pub async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
+    pub async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
         let conn = self.pool.get().await?;
 
         let row = conn
@@ -236,14 +240,15 @@ impl DbStateBackend {
                 &format!(
                     "SELECT last_sync_timestamp
                      FROM {}.table_state
-                     WHERE table_name = $1
+                     WHERE config_hash = $1
+                       AND table_name = $2
                        AND table_status = 'completed'
                        AND last_sync_timestamp IS NOT NULL
                      ORDER BY updated_at DESC
                      LIMIT 1",
                     self.schema
                 ),
-                &[&table_name],
+                &[&config_hash, &table_name],
             )
             .await?;
 
@@ -271,8 +276,12 @@ impl StateBackend for DbStateBackend {
         DbStateBackend::load_latest(self, config_hash).await
     }
 
-    async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
-        DbStateBackend::get_last_sync_timestamp(self, table_name).await
+    async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        DbStateBackend::get_last_sync_timestamp(self, config_hash, table_name).await
     }
 
     fn backend_type(&self) -> &'static str {

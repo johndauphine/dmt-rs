@@ -243,6 +243,9 @@ impl PostgresReader {
         pk_col: Option<&str>,
         min_pk: Option<i64>,
         max_pk: Option<i64>,
+        resume_from_pk: Option<i64>,
+        date_filter_column: Option<&str>,
+        date_filter_timestamp: Option<String>,
         tx: mpsc::Sender<Vec<Vec<SqlValue<'static>>>>,
         batch_size: usize,
     ) -> Result<i64> {
@@ -252,7 +255,17 @@ impl PostgresReader {
             .await
             .map_err(|e| MigrateError::pool(e, "getting connection for copy_rows_binary"))?;
 
-        let query = build_copy_query(schema, table, columns, pk_col, min_pk, max_pk);
+        let query = build_copy_query(
+            schema,
+            table,
+            columns,
+            pk_col,
+            min_pk,
+            max_pk,
+            resume_from_pk,
+            date_filter_column,
+            date_filter_timestamp.as_deref(),
+        );
         debug!("COPY query: {}", query);
 
         let copy_stream = client.copy_out(&query).await.map_err(|e| {
@@ -319,6 +332,9 @@ impl PostgresReader {
         pk_col: Option<&str>,
         min_pk: Option<i64>,
         max_pk: Option<i64>,
+        resume_from_pk: Option<i64>,
+        date_filter_column: Option<&str>,
+        date_filter_timestamp: Option<String>,
         tx: mpsc::Sender<Vec<Vec<TargetSqlValue>>>,
         batch_size: usize,
     ) -> Result<i64> {
@@ -328,7 +344,17 @@ impl PostgresReader {
             .await
             .map_err(|e| MigrateError::pool(e, "getting connection for copy_rows_binary"))?;
 
-        let query = build_copy_query(schema, table, columns, pk_col, min_pk, max_pk);
+        let query = build_copy_query(
+            schema,
+            table,
+            columns,
+            pk_col,
+            min_pk,
+            max_pk,
+            resume_from_pk,
+            date_filter_column,
+            date_filter_timestamp.as_deref(),
+        );
         debug!("COPY query: {}", query);
 
         let copy_stream = client.copy_out(&query).await.map_err(|e| {
@@ -948,6 +974,9 @@ fn build_copy_query(
     pk_col: Option<&str>,
     min_pk: Option<i64>,
     max_pk: Option<i64>,
+    resume_from_pk: Option<i64>,
+    date_filter_column: Option<&str>,
+    date_filter_timestamp: Option<&str>,
 ) -> String {
     let col_list = columns
         .iter()
@@ -957,40 +986,40 @@ fn build_copy_query(
 
     let table_ref = format!("{}.{}", quote_ident(schema), quote_ident(table));
 
-    match (pk_col, min_pk, max_pk) {
-        (Some(pk), Some(min), Some(max)) => {
-            format!(
-                "COPY (SELECT {} FROM {} WHERE {} >= {} AND {} <= {} ORDER BY {}) TO STDOUT (FORMAT BINARY)",
-                col_list, table_ref, quote_ident(pk), min, quote_ident(pk), max, quote_ident(pk)
-            )
+    let mut conditions = Vec::new();
+
+    if let Some(pk) = pk_col {
+        let pk_quoted = quote_ident(pk);
+
+        if let Some(resume_pk) = resume_from_pk {
+            conditions.push(format!("{} > {}", pk_quoted, resume_pk));
+        } else if let Some(min) = min_pk {
+            conditions.push(format!("{} >= {}", pk_quoted, min));
         }
-        (Some(pk), Some(min), None) => {
-            format!(
-                "COPY (SELECT {} FROM {} WHERE {} >= {} ORDER BY {}) TO STDOUT (FORMAT BINARY)",
-                col_list,
-                table_ref,
-                quote_ident(pk),
-                min,
-                quote_ident(pk)
-            )
-        }
-        (Some(pk), None, Some(max)) => {
-            format!(
-                "COPY (SELECT {} FROM {} WHERE {} <= {} ORDER BY {}) TO STDOUT (FORMAT BINARY)",
-                col_list,
-                table_ref,
-                quote_ident(pk),
-                max,
-                quote_ident(pk)
-            )
-        }
-        _ => {
-            format!(
-                "COPY (SELECT {} FROM {}) TO STDOUT (FORMAT BINARY)",
-                col_list, table_ref
-            )
+
+        if let Some(max) = max_pk {
+            conditions.push(format!("{} <= {}", pk_quoted, max));
         }
     }
+
+    if let (Some(column), Some(timestamp)) = (date_filter_column, date_filter_timestamp) {
+        let date_quoted = quote_ident(column);
+        conditions.push(format!(
+            "({} > '{}' OR {} IS NULL)",
+            date_quoted, timestamp, date_quoted
+        ));
+    }
+
+    let mut query = format!("COPY (SELECT {} FROM {}", col_list, table_ref);
+    if !conditions.is_empty() {
+        query.push_str(" WHERE ");
+        query.push_str(&conditions.join(" AND "));
+    }
+    if let Some(pk) = pk_col {
+        query.push_str(&format!(" ORDER BY {}", quote_ident(pk)));
+    }
+    query.push_str(") TO STDOUT (FORMAT BINARY)");
+    query
 }
 
 /// Estimate the size of a PostgreSQL column.
@@ -1229,5 +1258,44 @@ mod tests {
             ordinal_pos: 1,
         };
         assert_eq!(estimate_column_size(&col), 4);
+    }
+
+    #[test]
+    fn test_build_copy_query_scopes_resume_as_exclusive() {
+        let query = build_copy_query(
+            "public",
+            "users",
+            &["id".to_string(), "name".to_string()],
+            Some("id"),
+            None,
+            Some(500),
+            Some(100),
+            None,
+            None,
+        );
+
+        assert!(query.contains("\"id\" > 100"));
+        assert!(query.contains("\"id\" <= 500"));
+        assert!(!query.contains("\"id\" >= 100"));
+    }
+
+    #[test]
+    fn test_build_copy_query_includes_incremental_date_filter() {
+        let query = build_copy_query(
+            "public",
+            "users",
+            &["id".to_string(), "updated_at".to_string()],
+            Some("id"),
+            Some(1),
+            Some(1000),
+            None,
+            Some("updated_at"),
+            Some("2026-04-15 10:30:00.000"),
+        );
+
+        assert!(query.contains("\"id\" >= 1"));
+        assert!(query.contains("\"id\" <= 1000"));
+        assert!(query
+            .contains("(\"updated_at\" > '2026-04-15 10:30:00.000' OR \"updated_at\" IS NULL)"));
     }
 }

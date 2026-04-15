@@ -1,0 +1,29 @@
+source:
+  type: postgres
+  host: localhost
+  port: 5432
+  database: so2010_bench
+  schema: public
+  user: postgres
+  password: TestPass2024
+  ssl_mode: disable
+
+target:
+  type: postgres
+  host: localhost
+  port: 5434
+  database: so2010_incremental_test
+  schema: public
+  user: postgres
+  password: TestPass2024
+  ssl_mode: disable
+
+migration:
+  target_mode: upsert
+  workers: 2
+  chunk_size: 50000
+  date_updated_columns:
+    - LastAccessDate
+    - CreationDate
+  include_tables:
+    - users

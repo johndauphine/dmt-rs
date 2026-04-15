@@ -262,7 +262,11 @@ impl MysqlStateBackend {
 
     /// Get the last sync timestamp for a specific table (for incremental sync).
     /// Returns the most recent completed run's timestamp for this table.
-    pub async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
+    pub async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
         let mut conn = self
             .pool
             .get_conn()
@@ -272,7 +276,8 @@ impl MysqlStateBackend {
         let sql = format!(
             "SELECT last_sync_timestamp
              FROM `{}`.`table_state`
-             WHERE table_name = ?
+             WHERE config_hash = ?
+               AND table_name = ?
                AND table_status = 'completed'
                AND last_sync_timestamp IS NOT NULL
              ORDER BY updated_at DESC
@@ -281,7 +286,7 @@ impl MysqlStateBackend {
         );
 
         let row: Option<MySqlRow> = conn
-            .exec_first(&sql, (table_name,))
+            .exec_first(&sql, (config_hash, table_name))
             .await
             .map_err(|e| MigrateError::pool(e, "getting MySQL last sync timestamp"))?;
 
@@ -313,8 +318,12 @@ impl StateBackend for MysqlStateBackend {
         MysqlStateBackend::load_latest(self, config_hash).await
     }
 
-    async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
-        MysqlStateBackend::get_last_sync_timestamp(self, table_name).await
+    async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        MysqlStateBackend::get_last_sync_timestamp(self, config_hash, table_name).await
     }
 
     fn backend_type(&self) -> &'static str {

@@ -408,13 +408,27 @@ impl SourcePoolImpl {
         pk_col: Option<&str>,
         min_pk: Option<i64>,
         max_pk: Option<i64>,
+        resume_from_pk: Option<i64>,
+        date_filter_column: Option<&str>,
+        date_filter_timestamp: Option<String>,
         tx: mpsc::Sender<Vec<Vec<SqlValue>>>,
         batch_size: usize,
     ) -> Result<i64> {
         match self {
             Self::Postgres(p) => {
                 p.copy_rows_binary_for_target(
-                    schema, table, columns, col_types, pk_col, min_pk, max_pk, tx, batch_size,
+                    schema,
+                    table,
+                    columns,
+                    col_types,
+                    pk_col,
+                    min_pk,
+                    max_pk,
+                    resume_from_pk,
+                    date_filter_column,
+                    date_filter_timestamp,
+                    tx,
+                    batch_size,
                 )
                 .await
             }

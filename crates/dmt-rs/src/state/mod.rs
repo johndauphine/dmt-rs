@@ -90,12 +90,28 @@ impl StateBackendEnum {
     }
 
     /// Get the last sync timestamp for a specific table.
-    pub async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
+    pub async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
         match self {
-            Self::Postgres(backend) => backend.get_last_sync_timestamp(table_name).await,
-            Self::Mssql(backend) => backend.get_last_sync_timestamp(table_name).await,
+            Self::Postgres(backend) => {
+                backend
+                    .get_last_sync_timestamp(config_hash, table_name)
+                    .await
+            }
+            Self::Mssql(backend) => {
+                backend
+                    .get_last_sync_timestamp(config_hash, table_name)
+                    .await
+            }
             #[cfg(feature = "mysql")]
-            Self::Mysql(backend) => backend.get_last_sync_timestamp(table_name).await,
+            Self::Mysql(backend) => {
+                backend
+                    .get_last_sync_timestamp(config_hash, table_name)
+                    .await
+            }
         }
     }
 
@@ -125,8 +141,12 @@ impl StateBackend for StateBackendEnum {
         StateBackendEnum::load_latest(self, config_hash).await
     }
 
-    async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
-        StateBackendEnum::get_last_sync_timestamp(self, table_name).await
+    async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        StateBackendEnum::get_last_sync_timestamp(self, config_hash, table_name).await
     }
 
     fn backend_type(&self) -> &'static str {

@@ -257,20 +257,25 @@ impl MssqlStateBackend {
     }
 
     /// Get the last sync timestamp for a specific table (for incremental sync).
-    pub async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
+    pub async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
         let mut conn = self.pool.get_conn().await?;
 
         let sql = format!(
             "SELECT TOP 1 last_sync_timestamp
              FROM [{}].[table_state]
-             WHERE table_name = @P1
+             WHERE config_hash = @P1
+               AND table_name = @P2
                AND table_status = 'completed'
                AND last_sync_timestamp IS NOT NULL
              ORDER BY updated_at DESC",
             self.schema
         );
 
-        let rows = conn.query(sql, &[&table_name]).await?;
+        let rows = conn.query(sql, &[&config_hash, &table_name]).await?;
         let row: Option<Row> = rows
             .into_results()
             .await?
@@ -302,8 +307,12 @@ impl StateBackend for MssqlStateBackend {
         MssqlStateBackend::load_latest(self, config_hash).await
     }
 
-    async fn get_last_sync_timestamp(&self, table_name: &str) -> Result<Option<DateTime<Utc>>> {
-        MssqlStateBackend::get_last_sync_timestamp(self, table_name).await
+    async fn get_last_sync_timestamp(
+        &self,
+        config_hash: &str,
+        table_name: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        MssqlStateBackend::get_last_sync_timestamp(self, config_hash, table_name).await
     }
 
     fn backend_type(&self) -> &'static str {

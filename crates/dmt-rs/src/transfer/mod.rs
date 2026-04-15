@@ -347,7 +347,11 @@ impl TransferEngine {
     /// For partitioned tables, the orchestrator shares a single token across all
     /// partitions of the same table — so a failure in any partition cancels its
     /// siblings without waiting for the orchestrator's result-collection loop.
-    pub async fn execute(&self, job: TransferJob, cancel: CancellationToken) -> Result<TransferStats> {
+    pub async fn execute(
+        &self,
+        job: TransferJob,
+        cancel: CancellationToken,
+    ) -> Result<TransferStats> {
         let table_name = job.table.full_name();
         info!(
             "Starting transfer for {} (mode: {:?}, readers: {}, writers: {})",
@@ -1307,6 +1311,8 @@ async fn read_table_chunks_copy_binary(
     let min_pk = job.min_pk.or(job.resume_from_pk);
     let max_pk = job.max_pk;
     let pk_col_clone = pk_col_name.clone();
+    let date_filter_column = job.date_filter.as_ref().map(|f| f.column.clone());
+    let date_filter_timestamp = job.date_filter.as_ref().map(|f| f.timestamp_sql_safe());
 
     let copy_handle = tokio::spawn(async move {
         source_clone
@@ -1318,6 +1324,9 @@ async fn read_table_chunks_copy_binary(
                 pk_col_clone.as_deref(),
                 min_pk,
                 max_pk,
+                job.resume_from_pk,
+                date_filter_column.as_deref(),
+                date_filter_timestamp,
                 copy_tx,
                 chunk_size,
             )
