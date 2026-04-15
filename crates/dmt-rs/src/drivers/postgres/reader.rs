@@ -245,7 +245,9 @@ impl PostgresReader {
         max_pk: Option<i64>,
         resume_from_pk: Option<i64>,
         date_filter_column: Option<&str>,
+        date_filter_type: Option<&str>,
         date_filter_timestamp: Option<String>,
+        date_filter_timestamp_utc: Option<String>,
         tx: mpsc::Sender<Vec<Vec<SqlValue<'static>>>>,
         batch_size: usize,
     ) -> Result<i64> {
@@ -264,7 +266,9 @@ impl PostgresReader {
             max_pk,
             resume_from_pk,
             date_filter_column,
+            date_filter_type,
             date_filter_timestamp.as_deref(),
+            date_filter_timestamp_utc.as_deref(),
         );
         debug!("COPY query: {}", query);
 
@@ -334,7 +338,9 @@ impl PostgresReader {
         max_pk: Option<i64>,
         resume_from_pk: Option<i64>,
         date_filter_column: Option<&str>,
+        date_filter_type: Option<&str>,
         date_filter_timestamp: Option<String>,
+        date_filter_timestamp_utc: Option<String>,
         tx: mpsc::Sender<Vec<Vec<TargetSqlValue>>>,
         batch_size: usize,
     ) -> Result<i64> {
@@ -353,7 +359,9 @@ impl PostgresReader {
             max_pk,
             resume_from_pk,
             date_filter_column,
+            date_filter_type,
             date_filter_timestamp.as_deref(),
+            date_filter_timestamp_utc.as_deref(),
         );
         debug!("COPY query: {}", query);
 
@@ -976,7 +984,9 @@ fn build_copy_query(
     max_pk: Option<i64>,
     resume_from_pk: Option<i64>,
     date_filter_column: Option<&str>,
+    date_filter_type: Option<&str>,
     date_filter_timestamp: Option<&str>,
+    date_filter_timestamp_utc: Option<&str>,
 ) -> String {
     let col_list = columns
         .iter()
@@ -1002,12 +1012,27 @@ fn build_copy_query(
         }
     }
 
-    if let (Some(column), Some(timestamp)) = (date_filter_column, date_filter_timestamp) {
+    if let Some(column) = date_filter_column {
         let date_quoted = quote_ident(column);
-        conditions.push(format!(
-            "({} > '{}' OR {} IS NULL)",
-            date_quoted, timestamp, date_quoted
-        ));
+        let is_timestamptz = matches!(
+            date_filter_type.map(|t| t.to_lowercase()),
+            Some(ref t) if t == "timestamptz" || t == "timestamp with time zone"
+        );
+        let condition = if is_timestamptz {
+            let timestamp =
+                date_filter_timestamp_utc.expect("timezone-aware filter timestamp missing");
+            format!(
+                "({} > TIMESTAMPTZ '{}' OR {} IS NULL)",
+                date_quoted, timestamp, date_quoted
+            )
+        } else {
+            let timestamp = date_filter_timestamp.expect("date filter timestamp missing");
+            format!(
+                "({} > '{}' OR {} IS NULL)",
+                date_quoted, timestamp, date_quoted
+            )
+        };
+        conditions.push(condition);
     }
 
     let mut query = format!("COPY (SELECT {} FROM {}", col_list, table_ref);
@@ -1272,6 +1297,8 @@ mod tests {
             Some(100),
             None,
             None,
+            None,
+            None,
         );
 
         assert!(query.contains("\"id\" > 100"));
@@ -1290,12 +1317,33 @@ mod tests {
             Some(1000),
             None,
             Some("updated_at"),
+            Some("timestamp"),
             Some("2026-04-15 10:30:00.000"),
+            None,
         );
 
         assert!(query.contains("\"id\" >= 1"));
         assert!(query.contains("\"id\" <= 1000"));
         assert!(query
             .contains("(\"updated_at\" > '2026-04-15 10:30:00.000' OR \"updated_at\" IS NULL)"));
+    }
+
+    #[test]
+    fn test_build_copy_query_uses_explicit_utc_for_timestamptz_filter() {
+        let query = build_copy_query(
+            "public",
+            "users",
+            &["id".to_string(), "updated_at".to_string()],
+            Some("id"),
+            Some(1),
+            Some(1000),
+            None,
+            Some("updated_at"),
+            Some("timestamptz"),
+            Some("2026-04-15 10:30:00.000"),
+            Some("2026-04-15 10:30:00.000+00"),
+        );
+
+        assert!(query.contains("TIMESTAMPTZ '2026-04-15 10:30:00.000+00'"));
     }
 }

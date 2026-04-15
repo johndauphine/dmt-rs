@@ -42,6 +42,17 @@ impl MssqlStateBackend {
         );
         conn.execute(sql, &[]).await?;
 
+        let sql = format!(
+            "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_table_state_incremental_sync_by_config' AND object_id = OBJECT_ID('[{}].[table_state]'))
+             BEGIN
+                 CREATE INDEX idx_table_state_incremental_sync_by_config
+                 ON [{}].[table_state](config_hash, table_name, last_sync_timestamp DESC)
+                 WHERE table_status = 'completed' AND last_sync_timestamp IS NOT NULL
+             END",
+            self.schema, self.schema
+        );
+        conn.execute(sql, &[]).await?;
+
         // Create denormalized table_state table (includes run-level fields)
         let sql = format!(
             "IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'table_state' AND schema_id = SCHEMA_ID('{}'))
@@ -271,7 +282,7 @@ impl MssqlStateBackend {
                AND table_name = @P2
                AND table_status = 'completed'
                AND last_sync_timestamp IS NOT NULL
-             ORDER BY updated_at DESC",
+             ORDER BY last_sync_timestamp DESC",
             self.schema
         );
 

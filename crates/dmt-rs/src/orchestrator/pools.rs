@@ -410,7 +410,9 @@ impl SourcePoolImpl {
         max_pk: Option<i64>,
         resume_from_pk: Option<i64>,
         date_filter_column: Option<&str>,
+        date_filter_type: Option<&str>,
         date_filter_timestamp: Option<String>,
+        date_filter_timestamp_utc: Option<String>,
         tx: mpsc::Sender<Vec<Vec<SqlValue>>>,
         batch_size: usize,
     ) -> Result<i64> {
@@ -426,7 +428,9 @@ impl SourcePoolImpl {
                     max_pk,
                     resume_from_pk,
                     date_filter_column,
+                    date_filter_type,
                     date_filter_timestamp,
+                    date_filter_timestamp_utc,
                     tx,
                     batch_size,
                 )

@@ -1087,7 +1087,7 @@ impl Orchestrator {
 
                     if let Some(last_sync_ts) = last_sync {
                         // Incremental sync: only rows modified after last sync
-                        match DateFilter::new(col_name.clone(), last_sync_ts) {
+                        match DateFilter::new(col_name.clone(), col_type.clone(), last_sync_ts) {
                             Ok(filter) => {
                                 tables_incremental += 1;
                                 info!(
@@ -2365,13 +2365,25 @@ mod tests {
         completed.status = TaskStatus::Completed;
         completed.last_pk = Some(12345);
 
-        let resume_from_pk = if true && completed.status == TaskStatus::Completed {
-            None
-        } else {
-            completed.last_pk
-        };
+        let date_incremental_enabled = true;
+        let resume_from_pk =
+            if date_incremental_enabled && completed.status == TaskStatus::Completed {
+                None
+            } else {
+                completed.last_pk
+            };
 
         assert_eq!(resume_from_pk, None);
+
+        let date_incremental_enabled = false;
+        let resume_from_pk =
+            if date_incremental_enabled && completed.status == TaskStatus::Completed {
+                None
+            } else {
+                completed.last_pk
+            };
+
+        assert_eq!(resume_from_pk, Some(12345));
     }
 
     use crate::core::schema::Column;

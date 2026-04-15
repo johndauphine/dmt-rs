@@ -80,6 +80,17 @@ impl DbStateBackend {
         )
         .await?;
 
+        conn.execute(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS idx_table_state_incremental_sync_by_config
+                    ON {}.table_state(config_hash, table_name, last_sync_timestamp DESC)
+                    WHERE table_status = 'completed' AND last_sync_timestamp IS NOT NULL",
+                self.schema
+            ),
+            &[],
+        )
+        .await?;
+
         // Create index for latest run lookups
         conn.execute(
             &format!(
@@ -244,7 +255,7 @@ impl DbStateBackend {
                        AND table_name = $2
                        AND table_status = 'completed'
                        AND last_sync_timestamp IS NOT NULL
-                     ORDER BY updated_at DESC
+                     ORDER BY last_sync_timestamp DESC
                      LIMIT 1",
                     self.schema
                 ),

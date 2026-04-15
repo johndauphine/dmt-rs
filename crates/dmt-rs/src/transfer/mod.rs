@@ -29,6 +29,8 @@ use tracing::{debug, info, warn};
 pub struct DateFilter {
     /// Date column name to filter on.
     pub column: String,
+    /// Source column type for database-specific literal rendering.
+    pub column_type: String,
     /// Only sync rows where column > timestamp (or column IS NULL).
     pub timestamp: DateTime<Utc>,
 }
@@ -42,7 +44,7 @@ impl DateFilter {
     /// - Rejects future timestamps (clock skew or tampering)
     /// - Rejects very old timestamps (likely corruption or tampering)
     /// - Column name validated separately during query building
-    pub fn new(column: String, timestamp: DateTime<Utc>) -> Result<Self> {
+    pub fn new(column: String, column_type: String, timestamp: DateTime<Utc>) -> Result<Self> {
         let now = Utc::now();
 
         // Reject timestamps more than 1 hour in the future (allows for clock skew)
@@ -65,7 +67,11 @@ impl DateFilter {
             )));
         }
 
-        Ok(Self { column, timestamp })
+        Ok(Self {
+            column,
+            column_type,
+            timestamp,
+        })
     }
 
     /// Get the timestamp as a validated ISO 8601 string suitable for SQL.
@@ -85,6 +91,21 @@ impl DateFilter {
         // Compatible with SQL Server datetime and PostgreSQL timestamp
         // No single quotes, no semicolons, no SQL injection risk
         self.timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+    }
+
+    /// Get the timestamp as an explicit UTC literal for timezone-aware PostgreSQL columns.
+    pub fn timestamp_sql_safe_utc(&self) -> String {
+        self.timestamp
+            .format("%Y-%m-%d %H:%M:%S%.3f+00")
+            .to_string()
+    }
+
+    /// Returns true when the source column carries timezone information.
+    pub fn is_timezone_aware(&self) -> bool {
+        matches!(
+            self.column_type.to_lowercase().as_str(),
+            "timestamptz" | "timestamp with time zone"
+        )
     }
 }
 
@@ -1135,12 +1156,21 @@ async fn read_chunk_keyset_fast(
         };
         // SECURITY: timestamp_sql_safe() returns bounds-validated ISO 8601 string
         // ISO 8601 format (YYYY-MM-DD HH:MM:SS.fff) contains no SQL metacharacters
-        let timestamp_str = filter.timestamp_sql_safe();
+        let condition = if is_postgres && filter.is_timezone_aware() {
+            let timestamp_str = filter.timestamp_sql_safe_utc();
+            format!(
+                "({} > TIMESTAMPTZ '{}' OR {} IS NULL)",
+                date_quoted, timestamp_str, date_quoted
+            )
+        } else {
+            let timestamp_str = filter.timestamp_sql_safe();
+            format!(
+                "({} > '{}' OR {} IS NULL)",
+                date_quoted, timestamp_str, date_quoted
+            )
+        };
         // Include NULL values to catch rows without timestamps
-        conditions.push(format!(
-            "({} > '{}' OR {} IS NULL)",
-            date_quoted, timestamp_str, date_quoted
-        ));
+        conditions.push(condition);
     }
 
     if !conditions.is_empty() {
@@ -1312,7 +1342,9 @@ async fn read_table_chunks_copy_binary(
     let max_pk = job.max_pk;
     let pk_col_clone = pk_col_name.clone();
     let date_filter_column = job.date_filter.as_ref().map(|f| f.column.clone());
+    let date_filter_type = job.date_filter.as_ref().map(|f| f.column_type.clone());
     let date_filter_timestamp = job.date_filter.as_ref().map(|f| f.timestamp_sql_safe());
+    let date_filter_timestamp_utc = job.date_filter.as_ref().map(|f| f.timestamp_sql_safe_utc());
 
     let copy_handle = tokio::spawn(async move {
         source_clone
@@ -1326,7 +1358,9 @@ async fn read_table_chunks_copy_binary(
                 max_pk,
                 job.resume_from_pk,
                 date_filter_column.as_deref(),
+                date_filter_type.as_deref(),
                 date_filter_timestamp,
+                date_filter_timestamp_utc,
                 copy_tx,
                 chunk_size,
             )

@@ -64,7 +64,8 @@ impl MysqlStateBackend {
                 updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
                 PRIMARY KEY (run_id, table_name),
                 INDEX idx_config_hash (config_hash, run_started_at DESC),
-                INDEX idx_incremental_sync (table_name, table_status, last_sync_timestamp)
+                INDEX idx_incremental_sync (table_name, table_status, last_sync_timestamp),
+                INDEX idx_incremental_sync_by_config (config_hash, table_name, table_status, last_sync_timestamp)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             self.schema
         );
@@ -280,7 +281,7 @@ impl MysqlStateBackend {
                AND table_name = ?
                AND table_status = 'completed'
                AND last_sync_timestamp IS NOT NULL
-             ORDER BY updated_at DESC
+             ORDER BY last_sync_timestamp DESC
              LIMIT 1",
             self.schema
         );
