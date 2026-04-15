@@ -37,6 +37,12 @@ pub fn build_type_mapping_prompt(
 }
 
 /// Validate and clean an AI response to extract just the type name.
+///
+/// # Security
+///
+/// The returned string is used in DDL generation (CREATE TABLE statements).
+/// This function rejects responses containing SQL metacharacters to prevent
+/// injection attacks from malicious or confused AI responses.
 pub fn clean_type_response(response: &str) -> Option<String> {
     let cleaned = response
         .trim()
@@ -57,6 +63,29 @@ pub fn clean_type_response(response: &str) -> Option<String> {
 
     // Reject responses that look like explanations
     if cleaned.contains("The ") || cleaned.contains("This ") || cleaned.contains("You ") {
+        return None;
+    }
+
+    // Reject SQL metacharacters to prevent injection in DDL generation.
+    // Valid type names contain only: alphanumeric, spaces, parentheses, commas,
+    // brackets (for arrays like int[]), and periods (for schema-qualified types).
+    if cleaned.contains(';') || cleaned.contains("--") || cleaned.contains("/*") {
+        return None;
+    }
+
+    // Only allow characters that appear in valid type names
+    let valid = cleaned.chars().all(|c| {
+        c.is_alphanumeric()
+            || c == ' '
+            || c == '('
+            || c == ')'
+            || c == ','
+            || c == '['
+            || c == ']'
+            || c == '.'
+            || c == '_'
+    });
+    if !valid {
         return None;
     }
 
@@ -90,13 +119,34 @@ mod tests {
     }
 
     #[test]
-    fn test_clean_response() {
+    fn test_clean_response_valid() {
         assert_eq!(clean_type_response("text"), Some("text".to_string()));
         assert_eq!(clean_type_response("  text  "), Some("text".to_string()));
         assert_eq!(clean_type_response("`text`"), Some("text".to_string()));
         assert_eq!(clean_type_response("\"varchar(255)\""), Some("varchar(255)".to_string()));
+        assert_eq!(clean_type_response("numeric(18,2)"), Some("numeric(18,2)".to_string()));
+        assert_eq!(clean_type_response("integer[]"), Some("integer[]".to_string()));
+        assert_eq!(clean_type_response("double precision"), Some("double precision".to_string()));
+        assert_eq!(clean_type_response("character varying(100)"), Some("character varying(100)".to_string()));
+        assert_eq!(clean_type_response("bytea"), Some("bytea".to_string()));
+    }
+
+    #[test]
+    fn test_clean_response_rejects_invalid() {
         assert_eq!(clean_type_response(""), None);
         assert_eq!(clean_type_response("The best type is text"), None);
         assert_eq!(clean_type_response("line1\nline2"), None);
+    }
+
+    #[test]
+    fn test_clean_response_rejects_sql_injection() {
+        // Semicolons (statement termination)
+        assert_eq!(clean_type_response("TEXT); DROP TABLE users; --"), None);
+        // SQL comments
+        assert_eq!(clean_type_response("TEXT -- comment"), None);
+        assert_eq!(clean_type_response("TEXT /* block */"), None);
+        // Other dangerous characters
+        assert_eq!(clean_type_response("TEXT' OR '1'='1"), None);
+        assert_eq!(clean_type_response("TEXT; SELECT *"), None);
     }
 }
