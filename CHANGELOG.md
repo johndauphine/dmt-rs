@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.43.0] - 2026-04-14
+
+### Features
+- **AI-Powered Type Mapping** (#103) - LLM-backed type mapping for unknown/exotic database types
+  - Supports Anthropic, OpenAI, Ollama, and LM Studio providers
+  - Persistent JSON cache at `~/.dmt-rs/type-cache.json` — each type resolved once
+  - Feature-gated behind `--features ai` for zero impact on default binary
+  - Global config at `~/.dmt-rs/dmt-rs-config.yaml` with `--global-config` CLI flag
+  - Secure file permissions: directory `700`, files `600`, warns if too open
+  - SQL injection protection: AI responses validated against character allowlist
+
+### Bug Fixes
+- **Orchestrator Writer Failure Propagation** (#102) - Fixed #97: writer failures now cancel sibling partitions immediately via shared per-table `CancellationToken`. Previously, a writer failure in one partition would cascade into pool exhaustion and data loss.
+- **MSSQL Upsert Oversized Strings** (#101) - Check `CompressedText` in oversized string detection for MSSQL upsert staging path
+- **MSSQL Upsert Pool Timeout** (#100) - Cap `parallel_writers` to 1 for MSSQL upsert to prevent bb8 pool timeout (MERGE WITH TABLOCK serializes writers at DB level)
+
+### Documentation
+- Full 8-cell Go vs Rust benchmark comparison on identical infrastructure
+- Updated benchmark doc with fair same-session numbers
+
 ## [1.41.0] - 2026-01-24
 
 ### Features

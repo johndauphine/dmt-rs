@@ -6,15 +6,16 @@ Designed for headless operation in scripted environments, Kubernetes, and Airflo
 
 ## Performance
 
-Tested with Stack Overflow 2010 dataset (19.3M rows, 10 tables):
+Tested with Stack Overflow 2010 dataset (19.3M rows, 9 tables) on Apple M5 Pro:
 
-| Target | Mode | Duration | Throughput |
-|--------|------|----------|------------|
-| PostgreSQL | drop_recreate | 119s | 162,452 rows/sec |
-| PostgreSQL | upsert | ~180s | ~106,000 rows/sec |
-| MySQL | drop_recreate | 198s | 97,502 rows/sec |
+| Direction | Mode | Duration | Throughput |
+|-----------|------|----------|------------|
+| pg → pg | drop_recreate | **21s** | 905K rows/sec |
+| mssql → pg | drop_recreate | 36s | 533K rows/sec |
+| pg → pg | upsert | 34s | 561K rows/sec |
+| mssql → mssql | upsert | 92s | 209K rows/sec |
 
-*Auto-tuned parallelism, localhost transfers, binary COPY (PostgreSQL) / batched INSERT (MySQL)*
+*Auto-tuned parallelism, binary COPY (PostgreSQL), per-chunk MERGE WITH TABLOCK (MSSQL)*
 
 ## Features
 
@@ -29,7 +30,7 @@ Tested with Stack Overflow 2010 dataset (19.3M rows, 10 tables):
 - **Database state storage** - Migration state stored in target database (no external files)
 - **Interactive TUI** - Terminal UI for guided migration with real-time progress
 - **Configuration wizard** - Interactive `init` command creates config files
-- **Automatic type mapping** - Cross-database type conversion
+- **Automatic type mapping** - Cross-database type conversion with optional AI fallback for exotic types
 - **Keyset pagination** - Efficient chunked reads using `WHERE pk > last_pk`
 - **Resume capability** - Automatic crash recovery from database state
 - **Parallel finalization** - Concurrent index and constraint creation
@@ -65,7 +66,10 @@ cargo build --release
 # With MySQL support
 cargo build --release --features mysql
 
-# All features (MySQL + TUI + Kerberos)
+# With AI-powered type mapping
+cargo build --release --features ai
+
+# All features (MySQL + TUI + Kerberos + AI)
 cargo build --release --all-features
 ```
 
@@ -314,6 +318,55 @@ The state schema is automatically initialized on first run. No configuration or 
 | time | TIME(6) |
 | uniqueidentifier | CHAR(36) |
 | binary/varbinary | BLOB/LONGBLOB |
+
+## AI Type Mapping
+
+When built with `--features ai`, unknown or exotic database types (e.g., MSSQL `hierarchyid`, `geography`) can be automatically resolved using an LLM provider.
+
+### Setup
+
+```bash
+# Create config directory
+mkdir -p ~/.dmt-rs && chmod 700 ~/.dmt-rs
+
+# Create global config
+cat > ~/.dmt-rs/dmt-rs-config.yaml <<EOF
+ai:
+  api_key: ${env:ANTHROPIC_API_KEY}
+  provider: anthropic  # anthropic | openai | ollama | lmstudio
+EOF
+chmod 600 ~/.dmt-rs/dmt-rs-config.yaml
+```
+
+### How it works
+
+1. Static type mapper runs first for all known types
+2. Unknown types are batch-resolved via AI during a warm-up phase
+3. Results are cached to `~/.dmt-rs/type-cache.json` — each type is resolved once
+4. Subsequent runs use the cache (no API calls)
+
+### Providers
+
+| Provider | Config | Auth |
+|----------|--------|------|
+| Anthropic | `provider: anthropic` | `api_key` or `ANTHROPIC_API_KEY` env var |
+| OpenAI | `provider: openai` | `api_key` or `OPENAI_API_KEY` env var |
+| Ollama | `provider: ollama` | None (local) |
+| LM Studio | `provider: lmstudio` | None (local) |
+
+### Security
+
+- Config directory: `700` (owner only)
+- Config and cache files: `600` (owner read/write)
+- Warns if permissions are too open
+- AI responses validated against character allowlist to prevent SQL injection
+
+### CLI flag
+
+```bash
+# Use custom global config location
+dmt-rs --global-config /path/to/config.yaml -c migration.yaml run
+```
 
 ## Airflow Integration
 
