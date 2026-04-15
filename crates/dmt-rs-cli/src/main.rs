@@ -27,6 +27,7 @@ struct Cli {
     config: PathBuf,
 
     /// Path to global configuration file (default: ~/.dmt-rs/dmt-rs-config.yaml)
+    #[cfg(feature = "ai")]
     #[arg(long)]
     global_config: Option<PathBuf>,
 

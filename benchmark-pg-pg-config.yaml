@@ -1,0 +1,32 @@
+# Benchmark: PostgreSQL to PostgreSQL
+# Dataset: StackOverflow2013 (~106M rows)
+# Source: pg-bench container (port 5432)
+# Target: pg-target container (port 5434)
+
+source:
+  type: postgres
+  host: localhost
+  port: 5432
+  database: so2013
+  user: postgres
+  password: "TestPass2024"
+  schema: public
+  ssl_mode: disable
+
+target:
+  type: postgres
+  host: localhost
+  port: 5434
+  database: so2013_bench
+  user: postgres
+  password: "TestPass2024"
+  schema: public
+  ssl_mode: disable
+
+migration:
+  target_mode: drop_recreate
+  workers: 6
+  chunk_size: 100000
+  parallel_readers: 12
+  parallel_writers: 8
+  max_pg_connections: 40

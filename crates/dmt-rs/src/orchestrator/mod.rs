@@ -569,9 +569,11 @@ impl Orchestrator {
         // AI warm-up: resolve unknown types via LLM before DDL generation
         #[cfg(feature = "ai")]
         if let (Some(ai_config), Some(ai_cache)) = (&self.ai_config, &self.ai_cache) {
-            let source_dialect = self.config.source.r#type.to_lowercase();
-            let target_dialect = self.config.target.r#type.to_lowercase();
-            if let Some(mapper) = self.catalog.get_mapper(&source_dialect, &target_dialect) {
+            let source_dialect = DriverCatalog::normalize_db_type(&self.config.source.r#type)
+                .unwrap_or("unknown");
+            let target_dialect = DriverCatalog::normalize_db_type(&self.config.target.r#type)
+                .unwrap_or("unknown");
+            if let Some(mapper) = self.catalog.get_mapper(source_dialect, target_dialect) {
                 // Create a temporary AiTypeMapper just for warm-up scanning
                 let ai_mapper = crate::ai::AiTypeMapper::new(mapper, ai_cache.clone());
                 match crate::ai::create_provider(ai_config) {

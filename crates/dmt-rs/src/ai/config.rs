@@ -47,8 +47,19 @@ pub enum AiProvider {
 
 impl AiConfig {
     /// Resolve the API key, expanding ${env:VAR_NAME} references.
+    /// Falls back to provider-specific environment variables if api_key is empty.
     pub fn resolve_api_key(&self) -> String {
-        expand_env_vars(&self.api_key)
+        let key = expand_env_vars(&self.api_key);
+        if !key.is_empty() {
+            return key;
+        }
+        // Fallback to provider-specific env vars
+        let env_var = match self.provider {
+            AiProvider::Anthropic => "ANTHROPIC_API_KEY",
+            AiProvider::OpenAI => "OPENAI_API_KEY",
+            AiProvider::Ollama | AiProvider::LMStudio => return String::new(),
+        };
+        std::env::var(env_var).unwrap_or_default()
     }
 
     /// Get the cache file path, defaulting to ~/.dmt-rs/type-cache.json.
@@ -130,6 +141,7 @@ impl GlobalConfig {
     }
 
     /// Ensure the config directory exists with secure permissions (700).
+    /// Warns if an existing directory has overly permissive permissions.
     pub fn ensure_config_dir() -> crate::error::Result<PathBuf> {
         let dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -138,7 +150,6 @@ impl GlobalConfig {
         if !dir.exists() {
             std::fs::create_dir_all(&dir)?;
 
-            // Set directory to 700 (owner only) on Unix
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -146,12 +157,29 @@ impl GlobalConfig {
             }
 
             tracing::info!("Created config directory {:?} with restricted permissions", dir);
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&dir) {
+                    let mode = metadata.permissions().mode();
+                    if mode & 0o077 != 0 {
+                        tracing::warn!(
+                            "Config directory {:?} has overly permissive permissions ({:o}). \
+                             This directory may contain API keys. Run: chmod 700 {:?}",
+                            dir, mode & 0o777, dir
+                        );
+                    }
+                }
+            }
         }
 
         Ok(dir)
     }
 
     /// Write a global config file with secure permissions (600).
+    /// On Unix, the file is created with mode 600 from the start to avoid
+    /// a window where it's readable by others.
     pub fn save(&self, path: &Path) -> crate::error::Result<()> {
         // Ensure parent directory exists with secure permissions
         if let Some(parent) = path.parent() {
@@ -165,14 +193,22 @@ impl GlobalConfig {
                 format!("Failed to serialize global config: {}", e)
             ))?;
 
-        std::fs::write(path, &content)?;
-
-        // Set file to 600 (owner read/write only) on Unix
+        // Write with restricted permissions from the start
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)?;
+            file.write_all(content.as_bytes())?;
         }
+
+        #[cfg(not(unix))]
+        std::fs::write(path, &content)?;
 
         Ok(())
     }

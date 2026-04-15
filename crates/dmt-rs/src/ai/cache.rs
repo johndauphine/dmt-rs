@@ -176,17 +176,28 @@ impl TypeCache {
                 format!("Failed to serialize type cache: {}", e),
             )))?;
 
-        // Atomic write: write to temp file, then rename
+        // Atomic write: write to temp file with 600 permissions, then rename.
+        // Creating the temp file with restricted mode from the start avoids
+        // a window where schema/type details are world-readable.
         let tmp_path = self.file_path.with_extension("json.tmp");
-        std::fs::write(&tmp_path, &json)?;
-        std::fs::rename(&tmp_path, &self.file_path)?;
 
-        // Set cache file to 600 (owner read/write only)
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(0o600))?;
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp_path)?;
+            file.write_all(json.as_bytes())?;
         }
+
+        #[cfg(not(unix))]
+        std::fs::write(&tmp_path, &json)?;
+
+        std::fs::rename(&tmp_path, &self.file_path)?;
 
         debug!("Flushed {} entries to AI type cache {:?}", mem.len(), self.file_path);
         Ok(())

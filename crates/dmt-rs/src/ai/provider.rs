@@ -33,7 +33,7 @@ pub fn create_provider(config: &AiConfig) -> Result<Box<dyn AiProviderClient>> {
                     "AI provider 'anthropic' requires an api_key (set ai.api_key or ANTHROPIC_API_KEY env var)".into()
                 ));
             }
-            Ok(Box::new(AnthropicClient { api_key, model, base_url }))
+            Ok(Box::new(AnthropicClient { api_key, model, base_url, http: reqwest::Client::new() }))
         }
         AiProvider::OpenAI => {
             if api_key.is_empty() {
@@ -41,20 +41,22 @@ pub fn create_provider(config: &AiConfig) -> Result<Box<dyn AiProviderClient>> {
                     "AI provider 'openai' requires an api_key (set ai.api_key or OPENAI_API_KEY env var)".into()
                 ));
             }
-            Ok(Box::new(OpenAiCompatibleClient { api_key, model, base_url }))
+            Ok(Box::new(OpenAiCompatibleClient { api_key, model, base_url, http: reqwest::Client::new() }))
         }
         AiProvider::Ollama => {
             Ok(Box::new(OpenAiCompatibleClient {
-                api_key: String::new(), // Ollama doesn't need auth
+                api_key: String::new(),
                 model,
                 base_url,
+                http: reqwest::Client::new(),
             }))
         }
         AiProvider::LMStudio => {
             Ok(Box::new(OpenAiCompatibleClient {
-                api_key: String::new(), // LM Studio doesn't need auth
+                api_key: String::new(),
                 model,
                 base_url,
+                http: reqwest::Client::new(),
             }))
         }
     }
@@ -66,6 +68,7 @@ struct AnthropicClient {
     api_key: String,
     model: String,
     base_url: String,
+    http: reqwest::Client,
 }
 
 #[derive(Serialize)]
@@ -117,12 +120,11 @@ impl AiProviderClient for AnthropicClient {
             }],
         };
 
-        let client = reqwest::Client::new();
         let url = format!("{}/v1/messages", self.base_url);
 
         debug!("AI type mapping request: {} {} -> {}", source_type, source_db, target_db);
 
-        let response = client
+        let response = self.http
             .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
@@ -164,6 +166,7 @@ struct OpenAiCompatibleClient {
     api_key: String,
     model: String,
     base_url: String,
+    http: reqwest::Client,
 }
 
 #[derive(Serialize)]
@@ -218,12 +221,11 @@ impl AiProviderClient for OpenAiCompatibleClient {
             ],
         };
 
-        let client = reqwest::Client::new();
         let url = format!("{}/v1/chat/completions", self.base_url);
 
         debug!("AI type mapping request: {} {} -> {}", source_type, source_db, target_db);
 
-        let mut req = client
+        let mut req = self.http
             .post(&url)
             .header("content-type", "application/json")
             .json(&request)
