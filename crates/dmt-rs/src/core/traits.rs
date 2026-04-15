@@ -300,6 +300,18 @@ pub trait Dialect: Send + Sync {
         start_row: i64,
         end_row: i64,
     ) -> String;
+
+    /// Return AI type-mapping guidance for this dialect.
+    ///
+    /// When this dialect is the **source**, the guidance describes source-side
+    /// semantics the AI should know about (e.g., "user-defined types may be
+    /// enums"). When this dialect is the **target**, the guidance describes
+    /// target-side constraints (e.g., "prefer nvarchar over varchar for text").
+    ///
+    /// Returns `None` by default — dialects opt in by overriding this method.
+    fn ai_type_guidance(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Options for building a SELECT query.

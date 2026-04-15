@@ -1,4 +1,24 @@
+/// Context for augmenting the AI type mapping prompt with
+/// database-specific guidance from source and target dialects.
+#[derive(Debug, Clone, Default)]
+pub struct PromptContext {
+    /// Source dialect guidance (e.g., "user-defined types may be enums").
+    pub source_guidance: Option<String>,
+    /// Target dialect guidance (e.g., "prefer nvarchar for Unicode text").
+    pub target_guidance: Option<String>,
+}
+
 /// Build a type mapping prompt for the AI provider.
+///
+/// The prompt is composed from:
+/// 1. A generic system prompt (engine-agnostic)
+/// 2. Source/target database names and type metadata
+/// 3. Source dialect guidance (if provided)
+/// 4. Target dialect guidance (if provided)
+///
+/// Dialect-specific guidance is supplied by each database's `Dialect::ai_type_guidance()`
+/// implementation, keeping engine-specific rules with the engine code rather than
+/// hard-coding them in the prompt.
 pub fn build_type_mapping_prompt(
     source_db: &str,
     target_db: &str,
@@ -6,9 +26,13 @@ pub fn build_type_mapping_prompt(
     max_length: i32,
     precision: i32,
     scale: i32,
+    context: &PromptContext,
 ) -> (String, String) {
     let system = "You are a database type mapping expert. Your job is to map database column types \
-        from one database engine to another. Return ONLY the target type name with appropriate \
+        from one database engine to another. \
+        Preserve semantics over name similarity. Prefer lossless mappings. \
+        Preserve Unicode and character semantics where possible. \
+        Return ONLY the target type name with appropriate \
         parameters (e.g., 'varchar(255)', 'numeric(18,2)', 'text'). No explanation, no markdown, \
         no quotes — just the type name."
         .to_string();
@@ -29,6 +53,14 @@ pub fn build_type_mapping_prompt(
     }
     if scale > 0 {
         user.push_str(&format!("\nScale: {}", scale));
+    }
+
+    // Append dialect-specific guidance
+    if let Some(ref guidance) = context.source_guidance {
+        user.push_str(&format!("\n\nSource guidance: {}", guidance));
+    }
+    if let Some(ref guidance) = context.target_guidance {
+        user.push_str(&format!("\n\nTarget guidance: {}", guidance));
     }
 
     user.push_str("\n\nTarget type:");
@@ -97,25 +129,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_prompt() {
+    fn test_build_prompt_no_guidance() {
+        let ctx = PromptContext::default();
         let (system, user) = build_type_mapping_prompt(
-            "mssql", "postgres", "hierarchyid", 0, 0, 0,
+            "mssql", "postgres", "hierarchyid", 0, 0, 0, &ctx,
         );
         assert!(system.contains("database type mapping expert"));
+        assert!(system.contains("Preserve semantics"));
         assert!(user.contains("hierarchyid"));
         assert!(user.contains("mssql"));
         assert!(user.contains("postgres"));
-        // No length/precision/scale lines when 0
         assert!(!user.contains("Max length"));
+        assert!(!user.contains("Source guidance"));
+        assert!(!user.contains("Target guidance"));
     }
 
     #[test]
     fn test_build_prompt_with_params() {
+        let ctx = PromptContext::default();
         let (_, user) = build_type_mapping_prompt(
-            "mssql", "postgres", "decimal", 0, 18, 2,
+            "mssql", "postgres", "decimal", 0, 18, 2, &ctx,
         );
         assert!(user.contains("Precision: 18"));
         assert!(user.contains("Scale: 2"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_source_guidance() {
+        let ctx = PromptContext {
+            source_guidance: Some("User-defined types may be enums".to_string()),
+            target_guidance: None,
+        };
+        let (_, user) = build_type_mapping_prompt(
+            "postgres", "mssql", "contact_choice", 0, 0, 0, &ctx,
+        );
+        assert!(user.contains("Source guidance: User-defined types may be enums"));
+        assert!(!user.contains("Target guidance"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_target_guidance() {
+        let ctx = PromptContext {
+            source_guidance: None,
+            target_guidance: Some("Prefer nvarchar over varchar for text".to_string()),
+        };
+        let (_, user) = build_type_mapping_prompt(
+            "postgres", "mssql", "text", 0, 0, 0, &ctx,
+        );
+        assert!(user.contains("Target guidance: Prefer nvarchar over varchar for text"));
+        assert!(!user.contains("Source guidance"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_both_guidance() {
+        let ctx = PromptContext {
+            source_guidance: Some("Enums are text-like".to_string()),
+            target_guidance: Some("Use nvarchar for Unicode".to_string()),
+        };
+        let (_, user) = build_type_mapping_prompt(
+            "postgres", "mssql", "my_enum", 0, 0, 0, &ctx,
+        );
+        assert!(user.contains("Source guidance: Enums are text-like"));
+        assert!(user.contains("Target guidance: Use nvarchar for Unicode"));
+        // Source appears before target
+        let src_pos = user.find("Source guidance").unwrap();
+        let tgt_pos = user.find("Target guidance").unwrap();
+        assert!(src_pos < tgt_pos);
     }
 
     #[test]

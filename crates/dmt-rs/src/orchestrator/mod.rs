@@ -7,6 +7,7 @@ pub use pools::{SourcePoolImpl, TargetPoolImpl};
 use crate::config::{Config, TableStats, TargetMode};
 use crate::core::catalog::DriverCatalog;
 use crate::core::schema::Table;
+use crate::core::traits::TargetWriter;
 use crate::drivers::{SourceReaderImpl, TargetWriterImpl};
 use crate::error::{MigrateError, Result};
 use crate::state::{MigrationState, RunStatus, StateBackendEnum, TableState, TaskStatus};
@@ -577,11 +578,26 @@ impl Orchestrator {
             let target_dialect =
                 DriverCatalog::normalize_db_type(&self.config.target.r#type).unwrap_or("unknown");
             if let Some(mapper) = self.catalog.get_mapper(source_dialect, target_dialect) {
+                // Build prompt context from dialect-specific guidance
+                let prompt_context = crate::ai::PromptContext {
+                    source_guidance: self
+                        .catalog
+                        .get_dialect(source_dialect)
+                        .and_then(|d| d.ai_type_guidance().map(String::from)),
+                    target_guidance: self
+                        .catalog
+                        .get_dialect(target_dialect)
+                        .and_then(|d| d.ai_type_guidance().map(String::from)),
+                };
+
                 // Create a temporary AiTypeMapper just for warm-up scanning
                 let ai_mapper = crate::ai::AiTypeMapper::new(mapper, ai_cache.clone());
                 match crate::ai::create_provider(ai_config) {
                     Ok(provider) => {
-                        if let Err(e) = ai_mapper.warm_up(&tables, provider.as_ref()).await {
+                        if let Err(e) = ai_mapper
+                            .warm_up(&tables, provider.as_ref(), &prompt_context)
+                            .await
+                        {
                             warn!("AI warm-up failed, using static type mappings: {}", e);
                         }
                     }
@@ -787,9 +803,15 @@ impl Orchestrator {
     /// Prepare target database based on mode.
     async fn prepare_target(&self, tables: &[Table], _state: &mut MigrationState) -> Result<()> {
         let target_schema = &self.config.target.schema;
+        // Schema preparation needs the latest catalog-configured type mapper.
+        // This is especially important when AI type mapping is enabled after
+        // the orchestrator has already constructed its long-lived target pool.
+        // A single-connection writer is enough here because preparation runs
+        // sequentially and only issues DDL / metadata calls.
+        let prep_target = self.create_target_writer(1).await?;
 
         // Create schema if needed
-        self.target.create_schema(target_schema).await?;
+        prep_target.create_schema(target_schema).await?;
 
         match self.config.migration.target_mode {
             TargetMode::DropRecreate => {
@@ -797,14 +819,14 @@ impl Orchestrator {
                 for (i, table) in tables.iter().enumerate() {
                     let table_name = table.full_name();
                     info!("Preparing table {}/{}: {}", i + 1, tables.len(), table_name);
-                    self.target.drop_table(target_schema, &table.name).await?;
+                    prep_target.drop_table(target_schema, &table.name).await?;
 
                     if self.config.migration.use_unlogged_tables {
-                        self.target
+                        prep_target
                             .create_table_unlogged(table, target_schema)
                             .await?;
                     } else {
-                        self.target.create_table(table, target_schema).await?;
+                        prep_target.create_table(table, target_schema).await?;
                     }
                 }
             }
@@ -819,19 +841,18 @@ impl Orchestrator {
                         return Err(MigrateError::NoPrimaryKey(table_name));
                     }
 
-                    if !self.target.table_exists(target_schema, &table.name).await? {
+                    if !prep_target.table_exists(target_schema, &table.name).await? {
                         if self.config.migration.use_unlogged_tables {
-                            self.target
+                            prep_target
                                 .create_table_unlogged(table, target_schema)
                                 .await?;
                         } else {
-                            self.target.create_table(table, target_schema).await?;
+                            prep_target.create_table(table, target_schema).await?;
                         }
-                        self.target.create_primary_key(table, target_schema).await?;
+                        prep_target.create_primary_key(table, target_schema).await?;
                     } else {
                         // For existing tables, ensure primary key exists (required for upsert)
-                        if !self
-                            .target
+                        if !prep_target
                             .has_primary_key(target_schema, &table.name)
                             .await?
                         {
@@ -839,12 +860,11 @@ impl Orchestrator {
                                 "Adding missing primary key to existing table {}",
                                 table_name
                             );
-                            self.target.create_primary_key(table, target_schema).await?;
+                            prep_target.create_primary_key(table, target_schema).await?;
                         }
 
                         // Drop non-PK indexes for faster upserts (only recreated if create_indexes is enabled)
-                        let dropped = self
-                            .target
+                        let dropped = prep_target
                             .drop_non_pk_indexes(target_schema, &table.name)
                             .await?;
                         if !dropped.is_empty() {
@@ -857,7 +877,7 @@ impl Orchestrator {
 
                         if self.config.migration.use_unlogged_tables {
                             // Set existing table to UNLOGGED for faster writes
-                            self.target
+                            prep_target
                                 .set_table_unlogged(target_schema, &table.name)
                                 .await?;
                         }

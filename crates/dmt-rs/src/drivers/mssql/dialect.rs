@@ -196,6 +196,17 @@ SELECT * FROM numbered WHERE __rn >= {} AND __rn <= {}"#,
             end_row
         )
     }
+
+    fn ai_type_guidance(&self) -> Option<&str> {
+        Some(
+            "Microsoft SQL Server characteristics: \
+             nvarchar/nchar store Unicode (UTF-16), varchar/char store \
+             single-byte encodings only. datetime2 has nanosecond precision, \
+             datetime has 3.33ms precision. sql_variant can hold multiple \
+             types. hierarchyid and geography are CLR-based UDT types. \
+             XML is a native type with XQuery support.",
+        )
+    }
 }
 
 #[cfg(test)]

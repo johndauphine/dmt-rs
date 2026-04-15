@@ -1,4 +1,5 @@
 use crate::ai::cache::{CacheEntry, CacheKey, TypeCache};
+use crate::ai::prompt::PromptContext;
 use crate::ai::provider::AiProviderClient;
 use crate::core::schema::{Column, Table};
 use crate::core::traits::{ColumnMapping, TypeMapper, TypeMapping};
@@ -25,10 +26,14 @@ impl AiTypeMapper {
 
     /// Pre-populate cache for all unknown types found in the schema.
     /// Called after schema extraction, before DDL generation.
+    ///
+    /// `context` provides database-specific prompt guidance from the source
+    /// and target dialects (e.g., "prefer nvarchar for MSSQL text").
     pub async fn warm_up(
         &self,
         tables: &[Table],
         provider: &dyn AiProviderClient,
+        context: &PromptContext,
     ) -> Result<()> {
         // Collect all unique type signatures across all tables
         let mut unknown_keys: HashSet<CacheKey> = HashSet::new();
@@ -83,6 +88,7 @@ impl AiTypeMapper {
                     key.max_length,
                     key.precision,
                     key.scale,
+                    context,
                 )
                 .await
             {

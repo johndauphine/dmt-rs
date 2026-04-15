@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use tracing::{debug, info, warn};
 
+/// Prompt version — bump this when dialect guidance or prompt structure changes
+/// to invalidate cached results from older prompts.
+pub const PROMPT_VERSION: u32 = 2;
+
 /// Cache key uniquely identifying a type mapping request.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CacheKey {
@@ -36,28 +40,41 @@ impl CacheKey {
     }
 
     /// String key for JSON serialization.
+    /// Includes PROMPT_VERSION so cached results from older prompts are ignored.
     fn to_string_key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}",
+            "v{}|{}|{}|{}|{}|{}|{}",
+            PROMPT_VERSION,
             self.source_db, self.target_db, self.source_type,
             self.max_length, self.precision, self.scale
         )
     }
 
-    /// Parse from string key.
+    /// Parse from string key. Only accepts keys matching the current PROMPT_VERSION.
+    /// Old-version keys are silently skipped during cache load.
     fn from_string_key(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('|').collect();
-        if parts.len() != 6 {
-            return None;
+        if parts.len() == 7 {
+            // Versioned key: v{N}|source|target|type|len|prec|scale
+            let version_str = parts[0].strip_prefix('v')?;
+            let version: u32 = version_str.parse().ok()?;
+            if version != PROMPT_VERSION {
+                return None; // Skip old-version entries
+            }
+            Some(Self {
+                source_db: parts[1].to_string(),
+                target_db: parts[2].to_string(),
+                source_type: parts[3].to_string(),
+                max_length: parts[4].parse().ok()?,
+                precision: parts[5].parse().ok()?,
+                scale: parts[6].parse().ok()?,
+            })
+        } else if parts.len() == 6 {
+            // Legacy unversioned key — skip (treated as version 1)
+            None
+        } else {
+            None
         }
-        Some(Self {
-            source_db: parts[0].to_string(),
-            target_db: parts[1].to_string(),
-            source_type: parts[2].to_string(),
-            max_length: parts[3].parse().ok()?,
-            precision: parts[4].parse().ok()?,
-            scale: parts[5].parse().ok()?,
-        })
     }
 }
 
