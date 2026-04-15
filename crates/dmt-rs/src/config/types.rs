@@ -260,7 +260,9 @@ pub struct SourceConfig {
     #[serde(default = "default_dbo_schema")]
     pub schema: String,
 
-    /// SSL mode for PostgreSQL sources (default: "require"). Ignored for MSSQL/MySQL.
+    /// SSL mode for PostgreSQL and MySQL sources (default: "require").
+    /// Options: disable, prefer, require, verify-ca, verify-full.
+    /// For MSSQL sources, use the `encrypt` and `trust_server_cert` fields instead.
     #[serde(default = "default_require")]
     pub ssl_mode: String,
 
