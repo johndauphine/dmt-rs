@@ -1109,9 +1109,7 @@ fn format_mssql_type(data_type: &str, max_length: i32, precision: i32, scale: i3
     match lower.as_str() {
         "bigint" | "int" | "smallint" | "tinyint" | "bit" | "money" | "smallmoney" | "real"
         | "date" | "image" | "uniqueidentifier" | "xml" => data_type.to_string(),
-        // Convert datetime/smalldatetime to datetime2 for bulk insert compatibility
-        // (sql_value_to_column_data always sends DateTime2 data)
-        "datetime" | "smalldatetime" => "datetime2(7)".to_string(),
+        "datetime" | "smalldatetime" => data_type.to_string(),
         "float" => {
             if precision > 0 {
                 format!("float({})", precision)
@@ -1211,9 +1209,9 @@ fn sql_value_to_column_data(value: &SqlValue<'_>) -> ColumnData<'static> {
             SqlNullType::Bytes => ColumnData::Binary(None),
             SqlNullType::Uuid => ColumnData::Guid(None),
             SqlNullType::Decimal => ColumnData::Numeric(None),
-            SqlNullType::DateTime => ColumnData::DateTime2(None),
+            SqlNullType::DateTime => ColumnData::DateTime(None),
             SqlNullType::DateTimeOffset => ColumnData::DateTimeOffset(None),
-            SqlNullType::Date => ColumnData::DateTime2(None),
+            SqlNullType::Date => ColumnData::DateTime(None),
             SqlNullType::Time => ColumnData::Time(None),
         },
         SqlValue::Bool(b) => ColumnData::Bit(Some(*b)),
@@ -1254,19 +1252,18 @@ fn sql_value_to_column_data(value: &SqlValue<'_>) -> ColumnData<'static> {
             )))
         }
         SqlValue::DateTime(dt) => {
-            let epoch = chrono::NaiveDate::from_ymd_opt(1, 1, 1).unwrap();
-            let days_i64 = (dt.date() - epoch).num_days();
-            if days_i64 < 0 || days_i64 > u32::MAX as i64 {
-                return ColumnData::DateTime2(None);
-            }
-            let days = days_i64 as u32;
-            let date = tiberius::time::Date::new(days);
+            // Use ColumnData::DateTime (not DateTime2) for bulk insert compatibility.
+            // DateTime is accepted by both datetime and datetime2 target columns
+            // (MSSQL implicitly upcasts), but DateTime2 is rejected by datetime columns.
+            // DateTime epoch: 1900-01-01, seconds_fragments: 1/300th of a second.
+            let epoch = chrono::NaiveDate::from_ymd_opt(1900, 1, 1).unwrap();
+            let days = (dt.date() - epoch).num_days() as i32;
             let time_val = dt.time();
-            let nanos = time_val.num_seconds_from_midnight() as u64 * 1_000_000_000
-                + time_val.nanosecond() as u64;
-            let increments = nanos / 100;
-            let time = tiberius::time::Time::new(increments, 7);
-            ColumnData::DateTime2(Some(tiberius::time::DateTime2::new(date, time)))
+            let total_seconds = time_val.num_seconds_from_midnight() as u64;
+            let millis = (time_val.nanosecond() / 1_000_000) as u64;
+            // seconds_fragments = total_milliseconds * 300 / 1000 = total_milliseconds * 3 / 10
+            let seconds_fragments = ((total_seconds * 1000 + millis) * 3 / 10) as u32;
+            ColumnData::DateTime(Some(tiberius::time::DateTime::new(days, seconds_fragments)))
         }
         SqlValue::DateTimeOffset(dto) => {
             let naive = dto.naive_utc();

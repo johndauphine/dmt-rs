@@ -31,18 +31,37 @@ pub struct MysqlReader {
 impl MysqlReader {
     /// Create a new MySQL reader from configuration.
     pub async fn new(config: &SourceConfig, max_conns: usize) -> Result<Self> {
-        // Determine SSL options based on encrypt and trust_server_cert fields
-        let ssl_opts = if config.encrypt {
-            if config.trust_server_cert {
-                // Encrypt but don't validate certificate
-                Some(SslOpts::default().with_danger_accept_invalid_certs(true))
-            } else {
-                // Encrypt with certificate validation
-                Some(SslOpts::default())
+        // Determine SSL options based on ssl_mode (preferred) or encrypt fields.
+        // MySQL source configs typically use ssl_mode: disable/require/prefer.
+        let ssl_opts = match config.ssl_mode.to_lowercase().as_str() {
+            "disable" | "disabled" | "false" => {
+                warn!("MySQL TLS is disabled. Credentials will be transmitted in plaintext.");
+                None
             }
-        } else {
-            warn!("MySQL TLS is disabled. Credentials will be transmitted in plaintext.");
-            None
+            "require" | "required" | "verify-ca" | "verify-full" => {
+                if config.trust_server_cert {
+                    Some(SslOpts::default().with_danger_accept_invalid_certs(true))
+                } else {
+                    Some(SslOpts::default())
+                }
+            }
+            "prefer" | "preferred" => {
+                // Try TLS but don't fail if server doesn't support it
+                Some(SslOpts::default().with_danger_accept_invalid_certs(true))
+            }
+            _ => {
+                // Fall back to encrypt field for backward compatibility
+                if config.encrypt {
+                    if config.trust_server_cert {
+                        Some(SslOpts::default().with_danger_accept_invalid_certs(true))
+                    } else {
+                        Some(SslOpts::default())
+                    }
+                } else {
+                    warn!("MySQL TLS is disabled. Credentials will be transmitted in plaintext.");
+                    None
+                }
+            }
         };
 
         let mut builder = OptsBuilder::default()

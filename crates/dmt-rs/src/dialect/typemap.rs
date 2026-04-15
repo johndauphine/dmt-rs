@@ -312,23 +312,56 @@ impl TypeMapper for IdentityMapper {
     }
 
     fn map_column(&self, col: &Column) -> ColumnMapping {
+        // Reconstruct the full type string with parameters for identity mapping
+        let target_type =
+            self.map_type(&col.data_type, col.max_length, col.precision, col.scale);
         ColumnMapping {
             name: col.name.clone(),
-            target_type: col.data_type.clone(),
+            target_type: target_type.target_type,
             is_nullable: col.is_nullable,
-            warning: None,
+            warning: target_type.warning,
         }
     }
 
     fn map_type(
         &self,
         data_type: &str,
-        _max_length: i32,
-        _precision: i32,
-        _scale: i32,
+        max_length: i32,
+        precision: i32,
+        scale: i32,
     ) -> TypeMapping {
-        // Identity mapping - preserve type as-is
-        TypeMapping::lossless(data_type.to_string())
+        // Identity mapping — reconstruct the full type string with parameters.
+        // The base data_type (e.g., "nvarchar") needs length/precision/scale
+        // appended to produce a valid DDL type (e.g., "nvarchar(40)").
+        let full_type = match data_type.to_lowercase().as_str() {
+            // Types with length parameter
+            "nvarchar" | "nchar" if max_length == -1 => format!("{}(max)", data_type),
+            "nvarchar" | "nchar" if max_length > 0 => {
+                // Use raw byte length from sys.columns — tiberius bulk insert
+                // validates encoded length against this value directly.
+                format!("{}({})", data_type, max_length)
+            }
+            "varchar" | "char" | "varbinary" | "binary" if max_length == -1 => {
+                format!("{}(max)", data_type)
+            }
+            "varchar" | "char" | "varbinary" | "binary" if max_length > 0 => {
+                format!("{}({})", data_type, max_length)
+            }
+            // Types with precision and scale
+            "decimal" | "numeric" if precision > 0 => {
+                format!("{}({},{})", data_type, precision, scale)
+            }
+            // Types with scale only (datetime2, time, datetimeoffset)
+            "datetime2" | "time" | "datetimeoffset" if scale > 0 => {
+                format!("{}({})", data_type, scale)
+            }
+            "float" if precision > 0 && precision != 53 => {
+                format!("float({})", precision)
+            }
+            // All other types pass through as-is
+            _ => data_type.to_string(),
+        };
+        TypeMapping::lossless(full_type)
     }
 }
 
