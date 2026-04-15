@@ -182,15 +182,18 @@ async fn run() -> Result<(), MigrateError> {
     // or the path specified by --global-config.
     #[cfg(feature = "ai")]
     let global_config = {
-        let global_path = cli.global_config.clone().unwrap_or_else(
-            dmt_rs::ai::GlobalConfig::default_path
-        );
+        let global_path = cli
+            .global_config
+            .clone()
+            .unwrap_or_else(dmt_rs::ai::GlobalConfig::default_path);
         let gc = dmt_rs::ai::GlobalConfig::load(&global_path)?;
         if gc.ai.is_some() {
             info!("Loaded global config from {:?} (AI enabled)", global_path);
         }
         gc
     };
+    #[cfg(not(feature = "ai"))]
+    let global_config = ();
 
     // Load configuration with initial auto-tuning for connection pool sizes.
     // Will be re-tuned after schema extraction with actual row sizes.
@@ -223,12 +226,7 @@ async fn run() -> Result<(), MigrateError> {
 
             // Create orchestrator (automatically initializes database state schema)
             let mut orchestrator = Orchestrator::new(config).await?;
-
-            // Enable AI type mapping if configured
-            #[cfg(feature = "ai")]
-            if let Some(ai_config) = &global_config.ai {
-                orchestrator = orchestrator.with_ai_config(ai_config);
-            }
+            orchestrator = with_global_ai_config(orchestrator, &global_config);
 
             // Auto-resume from database state if it exists
             // This makes 'run' idempotent and enables incremental sync workflows:
@@ -290,7 +288,9 @@ async fn run() -> Result<(), MigrateError> {
             }
 
             // Create orchestrator and load state from database
-            let mut orchestrator = Orchestrator::new(config).await?.resume().await?;
+            let mut orchestrator = Orchestrator::new(config).await?;
+            orchestrator = with_global_ai_config(orchestrator, &global_config);
+            orchestrator = orchestrator.resume().await?;
 
             // Enable progress reporting if requested
             if cli.progress {
@@ -397,6 +397,35 @@ async fn run() -> Result<(), MigrateError> {
     Ok(())
 }
 
+#[cfg(feature = "ai")]
+trait AiConfigurable: Sized {
+    fn with_ai_config(self, ai_config: &dmt_rs::ai::AiConfig) -> Self;
+}
+
+#[cfg(feature = "ai")]
+impl AiConfigurable for Orchestrator {
+    fn with_ai_config(self, ai_config: &dmt_rs::ai::AiConfig) -> Self {
+        Self::with_ai_config(self, ai_config)
+    }
+}
+
+#[cfg(feature = "ai")]
+fn with_global_ai_config<T>(value: T, global_config: &dmt_rs::ai::GlobalConfig) -> T
+where
+    T: AiConfigurable,
+{
+    if let Some(ai_config) = &global_config.ai {
+        value.with_ai_config(ai_config)
+    } else {
+        value
+    }
+}
+
+#[cfg(not(feature = "ai"))]
+fn with_global_ai_config<T>(value: T, _global_config: &()) -> T {
+    value
+}
+
 fn setup_logging(verbosity: &str, format: &str) -> Result<(), String> {
     let level = match verbosity.to_lowercase().as_str() {
         "debug" => Level::DEBUG,
@@ -490,4 +519,52 @@ async fn setup_signal_handler(_shutdown_timeout: u64) -> Result<CancellationToke
     });
 
     Ok(cancel_token)
+}
+
+#[cfg(all(test, feature = "ai"))]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Default)]
+    struct SpyConfigurable {
+        ai_enabled: bool,
+        provider: Option<dmt_rs::ai::AiProvider>,
+    }
+
+    impl AiConfigurable for SpyConfigurable {
+        fn with_ai_config(mut self, ai_config: &dmt_rs::ai::AiConfig) -> Self {
+            self.ai_enabled = true;
+            self.provider = Some(ai_config.provider.clone());
+            self
+        }
+    }
+
+    #[test]
+    fn with_global_ai_config_enables_ai_when_present() {
+        let global_config = dmt_rs::ai::GlobalConfig {
+            ai: Some(dmt_rs::ai::AiConfig {
+                api_key: "test-key".to_string(),
+                provider: dmt_rs::ai::AiProvider::OpenAI,
+                model: None,
+                base_url: None,
+                cache_path: None,
+            }),
+        };
+
+        let configurable = with_global_ai_config(SpyConfigurable::default(), &global_config);
+
+        assert!(configurable.ai_enabled);
+        assert_eq!(configurable.provider, Some(dmt_rs::ai::AiProvider::OpenAI));
+    }
+
+    #[test]
+    fn with_global_ai_config_is_noop_when_absent() {
+        let configurable = with_global_ai_config(
+            SpyConfigurable::default(),
+            &dmt_rs::ai::GlobalConfig::default(),
+        );
+
+        assert!(!configurable.ai_enabled);
+        assert_eq!(configurable.provider, None);
+    }
 }
