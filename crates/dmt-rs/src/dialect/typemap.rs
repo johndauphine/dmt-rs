@@ -553,7 +553,7 @@ fn postgres_to_mssql(pg_type: &str, max_length: i32, precision: i32, scale: i32)
         "oid" => TypeMapping::lossless("bigint"),
 
         // Default fallback
-        _ => TypeMapping::lossy(
+        _ => TypeMapping::fallback(
             "nvarchar(max)",
             format!("Unknown PostgreSQL type '{}' stored as string.", pg_type),
         ),
@@ -656,7 +656,7 @@ fn mysql_to_postgres(mysql_type: &str, max_length: i32, precision: i32, scale: i
         ),
 
         // Default fallback
-        _ => TypeMapping::lossy(
+        _ => TypeMapping::fallback(
             "text",
             format!("Unknown MySQL type '{}' stored as text.", mysql_type),
         ),
@@ -818,7 +818,7 @@ fn postgres_to_mysql(pg_type: &str, max_length: i32, precision: i32, scale: i32)
         "oid" => TypeMapping::lossless("BIGINT UNSIGNED"),
 
         // Default fallback
-        _ => TypeMapping::lossy(
+        _ => TypeMapping::fallback(
             "LONGTEXT",
             format!("Unknown PostgreSQL type '{}' stored as text.", pg_type),
         ),
@@ -933,7 +933,7 @@ fn mysql_to_mssql(mysql_type: &str, max_length: i32, precision: i32, scale: i32)
         ),
 
         // Default fallback
-        _ => TypeMapping::lossy(
+        _ => TypeMapping::fallback(
             "nvarchar(max)",
             format!("Unknown MySQL type '{}' stored as string.", mysql_type),
         ),
@@ -1043,7 +1043,7 @@ pub fn mssql_to_mysql(
         ),
 
         // Default fallback
-        _ => TypeMapping::lossy(
+        _ => TypeMapping::fallback(
             "LONGTEXT",
             format!("Unknown MSSQL type '{}' stored as text.", mssql_type),
         ),
@@ -1349,7 +1349,7 @@ impl FromCanonical for MssqlFromCanonical {
             CanonicalType::Set(_) => TypeMapping::lossy("nvarchar(max)", "SET stored as string."),
 
             // Fallback
-            CanonicalType::Unknown(name) => TypeMapping::lossy(
+            CanonicalType::Unknown(name) => TypeMapping::fallback(
                 "nvarchar(max)",
                 format!("Unknown type '{}' stored as string.", name),
             ),
@@ -1480,6 +1480,7 @@ impl FromCanonical for PostgresFromCanonical {
                     target_type: format!("{}[]", inner_mapping.target_type),
                     is_lossy: inner_mapping.is_lossy,
                     warning: inner_mapping.warning,
+                    is_fallback: inner_mapping.is_fallback,
                 }
             }
 
@@ -1495,7 +1496,7 @@ impl FromCanonical for PostgresFromCanonical {
 
             // Fallback
             CanonicalType::Unknown(name) => {
-                TypeMapping::lossy("text", format!("Unknown type '{}' stored as text.", name))
+                TypeMapping::fallback("text", format!("Unknown type '{}' stored as text.", name))
             }
         }
     }
@@ -1998,7 +1999,7 @@ impl FromCanonical for MysqlFromCanonical {
             }
 
             // Fallback
-            CanonicalType::Unknown(name) => TypeMapping::lossy(
+            CanonicalType::Unknown(name) => TypeMapping::fallback(
                 "LONGTEXT",
                 format!("Unknown type '{}' stored as text.", name),
             ),
