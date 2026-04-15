@@ -32,25 +32,30 @@ impl MysqlReader {
     /// Create a new MySQL reader from configuration.
     pub async fn new(config: &SourceConfig, max_conns: usize) -> Result<Self> {
         // Determine SSL options based on ssl_mode (preferred) or encrypt fields.
-        // MySQL source configs typically use ssl_mode: disable/require/prefer.
         let ssl_opts = match config.ssl_mode.to_lowercase().as_str() {
             "disable" | "disabled" | "false" => {
                 warn!("MySQL TLS is disabled. Credentials will be transmitted in plaintext.");
                 None
             }
-            "require" | "required" | "verify-ca" | "verify-full" => {
+            "require" | "required" => {
                 if config.trust_server_cert {
                     Some(SslOpts::default().with_danger_accept_invalid_certs(true))
                 } else {
                     Some(SslOpts::default())
                 }
             }
+            "verify-ca" | "verify-full" => {
+                // Certificate validation required — ignore trust_server_cert
+                Some(SslOpts::default())
+            }
             "prefer" | "preferred" => {
-                // Try TLS but don't fail if server doesn't support it
                 Some(SslOpts::default().with_danger_accept_invalid_certs(true))
             }
-            _ => {
-                // Fall back to encrypt field for backward compatibility
+            other => {
+                warn!(
+                    "Unknown MySQL ssl_mode '{}', falling back to encrypt field",
+                    other
+                );
                 if config.encrypt {
                     if config.trust_server_cert {
                         Some(SslOpts::default().with_danger_accept_invalid_certs(true))
