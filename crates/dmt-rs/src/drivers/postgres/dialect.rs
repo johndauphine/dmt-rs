@@ -169,6 +169,18 @@ SELECT * FROM numbered WHERE __rn >= {} AND __rn <= {}"#,
             end_row
         )
     }
+
+    fn ai_type_guidance(&self) -> Option<&str> {
+        Some(
+            "PostgreSQL characteristics: \
+             text and varchar are interchangeable (text has no performance penalty). \
+             timestamptz stores timezone-aware datetimes, timestamp does not. \
+             User-defined types include enums (constrained text values), domains \
+             (type aliases with constraints), and composites. Enums and domains \
+             are text-like. Array types use bracket syntax (e.g., integer[]). \
+             UUID is a native type. JSONB is a native binary JSON type.",
+        )
+    }
 }
 
 #[cfg(test)]

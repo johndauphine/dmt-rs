@@ -15,4 +15,5 @@ mod provider;
 pub use cache::TypeCache;
 pub use config::{AiConfig, AiProvider, GlobalConfig};
 pub use mapper::AiTypeMapper;
+pub use prompt::PromptContext;
 pub use provider::{AiProviderClient, create_provider};

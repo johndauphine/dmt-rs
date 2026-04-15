@@ -1,5 +1,5 @@
 use crate::ai::config::{AiConfig, AiProvider};
-use crate::ai::prompt::{build_type_mapping_prompt, clean_type_response};
+use crate::ai::prompt::{build_type_mapping_prompt, clean_type_response, PromptContext};
 use crate::error::{MigrateError, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,7 @@ pub trait AiProviderClient: Send + Sync {
         max_length: i32,
         precision: i32,
         scale: i32,
+        context: &PromptContext,
     ) -> Result<String>;
 }
 
@@ -105,9 +106,10 @@ impl AiProviderClient for AnthropicClient {
         max_length: i32,
         precision: i32,
         scale: i32,
+        context: &PromptContext,
     ) -> Result<String> {
         let (system, user) = build_type_mapping_prompt(
-            source_db, target_db, source_type, max_length, precision, scale,
+            source_db, target_db, source_type, max_length, precision, scale, context,
         );
 
         let request = AnthropicRequest {
@@ -207,9 +209,10 @@ impl AiProviderClient for OpenAiCompatibleClient {
         max_length: i32,
         precision: i32,
         scale: i32,
+        context: &PromptContext,
     ) -> Result<String> {
         let (system, user) = build_type_mapping_prompt(
-            source_db, target_db, source_type, max_length, precision, scale,
+            source_db, target_db, source_type, max_length, precision, scale, context,
         );
 
         let request = OpenAiRequest {

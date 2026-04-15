@@ -171,6 +171,19 @@ SELECT * FROM numbered WHERE __rn >= {} AND __rn <= {}"#,
             end_row
         )
     }
+
+    fn ai_type_guidance(&self) -> Option<&str> {
+        Some(
+            "MySQL/MariaDB characteristics: \
+             UTF-8 text requires utf8mb4 charset (utf8 is only 3-byte). \
+             ENUM and SET are native constrained-value types. \
+             DATETIME(6) supports microsecond precision, DATETIME does not. \
+             BLOB/LONGBLOB for binary data, LONGTEXT for large text. \
+             Index key length limit is 767 bytes with utf8mb4, so indexed \
+             varchar columns should be varchar(191) or shorter. \
+             JSON is a native type (alias for LONGTEXT in older versions).",
+        )
+    }
 }
 
 #[cfg(test)]
