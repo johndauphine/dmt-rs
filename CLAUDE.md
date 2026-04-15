@@ -17,6 +17,9 @@ cargo build --release --features tui
 # With Kerberos authentication (MSSQL only)
 cargo build --release --features kerberos
 
+# With AI-powered type mapping
+cargo build --release --features ai
+
 # All features
 cargo build --release --all-features
 ```
@@ -123,7 +126,7 @@ To add a new database driver:
 ### Data Flow
 
 ```
-Config → Auto-Tuning → Schema Extraction → Connection Pools
+Config → Auto-Tuning → Schema Extraction → [AI Type Warm-up] → Connection Pools
     → Transfer Engine (parallel readers → read-ahead buffer → parallel writers)
     → Finalization (indexes, FKs, check constraints) → State Persistence
 ```
@@ -142,6 +145,7 @@ All paths relative to `crates/dmt-rs/src/`:
 | `dialect/` | SQL dialect strategies and cross-database type mapping |
 | `core/` | Traits (`SourceReader`, `TargetWriter`, `Dialect`), schema types, value types |
 | `config/` | Configuration loading, validation, auto-tuning |
+| `ai/` | AI-powered type mapping: LLM providers, cache, prompt construction (feature-gated) |
 
 ### Target Modes
 
@@ -167,13 +171,33 @@ Custom error types in `src/error.rs` with Airflow-compatible exit codes:
 | `mysql` | dmt-rs | MySQL/MariaDB source support via SQLx |
 | `kerberos` | both | MSSQL Kerberos auth via GSSAPI |
 | `tui` | dmt-rs-cli | Terminal UI with ratatui |
+| `ai` | both | AI-powered type mapping via LLM (Anthropic, OpenAI, Ollama, LM Studio) |
 
 ## Dependencies Notes
 
 - Uses a **forked tiberius** with 32KB packet size support (42% faster than default)
 - PostgreSQL uses binary COPY protocol for optimal ingestion
 - MySQL support is feature-gated to avoid pulling SQLx when not needed
+- AI feature adds `reqwest` and `dirs` — feature-gated to avoid bloat for users who don't need it
 - `main.rs` installs the **rustls ring** crypto provider before any TLS work — required because `tokio-postgres-rustls` and `mysql_async` both pull rustls with different defaults. Don't remove this initialization.
+
+## AI Type Mapping
+
+When built with `--features ai`, dmt-rs can use LLMs to resolve unknown database types. Configuration lives in a **global config file** (separate from the per-migration config):
+
+```yaml
+# ~/.dmt-rs/dmt-rs-config.yaml
+ai:
+  api_key: ${env:ANTHROPIC_API_KEY}  # or hardcoded (file is chmod 600)
+  provider: anthropic                 # anthropic | openai | ollama | lmstudio
+  model: claude-haiku-4-5-20251001   # optional, sensible defaults
+```
+
+- **Static mapper first**: AI is only consulted for types the static mapper marks as `is_fallback`
+- **Warm-up phase**: After schema extraction, unknown types are batch-resolved before DDL generation
+- **Persistent cache**: Results stored in `~/.dmt-rs/type-cache.json` — each type resolved once
+- **Security**: Config directory `700`, files `600`, warns if permissions too open. AI responses validated against character allowlist to prevent SQL injection in DDL
+- **CLI flag**: `--global-config /path/to/config.yaml` overrides the default location
 
 ## Project Conventions
 
