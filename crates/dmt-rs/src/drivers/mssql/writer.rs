@@ -925,7 +925,6 @@ async fn ensure_staging_table(
         SELECT c.name,
                CASE
                    WHEN t.name = 'tinyint' THEN 'smallint'
-                   WHEN t.name IN ('datetime', 'smalldatetime') THEN 'datetime2(7)'
                    WHEN t.name IN ('nvarchar', 'nchar') AND c.max_length = -1 THEN t.name + '(max)'
                    WHEN t.name IN ('nvarchar', 'nchar') THEN t.name + '(' + CAST(c.max_length/2 AS VARCHAR) + ')'
                    WHEN t.name IN ('varchar', 'char', 'varbinary', 'binary') AND c.max_length = -1 THEN t.name + '(max)'
@@ -1252,9 +1251,10 @@ fn sql_value_to_column_data(value: &SqlValue<'_>) -> ColumnData<'static> {
             )))
         }
         SqlValue::DateTime(dt) => {
-            // Use ColumnData::DateTime (not DateTime2) for bulk insert compatibility.
-            // DateTime is accepted by both datetime and datetime2 target columns
-            // (MSSQL implicitly upcasts), but DateTime2 is rejected by datetime columns.
+            // Send ColumnData::DateTime (the old TDS datetime type) because
+            // tiberius bulk insert enforces strict type matching and the staging
+            // table / target table columns are typed as `datetime` (the staging
+            // table upcast to datetime2 was removed to keep types consistent).
             // DateTime epoch: 1900-01-01, seconds_fragments: 1/300th of a second.
             let epoch = chrono::NaiveDate::from_ymd_opt(1900, 1, 1).unwrap();
             let days = (dt.date() - epoch).num_days() as i32;

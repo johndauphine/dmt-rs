@@ -510,7 +510,7 @@ fn postgres_to_mssql(pg_type: &str, max_length: i32, precision: i32, scale: i32)
             "datetimeoffset",
             "time with time zone converted to datetimeoffset. Date portion set to 1900-01-01.",
         ),
-        "timestamp" | "timestamp without time zone" => TypeMapping::lossless("datetime2"),
+        "timestamp" | "timestamp without time zone" => TypeMapping::lossless("datetime"),
         "timestamptz" | "timestamp with time zone" => TypeMapping::lossless("datetimeoffset"),
         "interval" => TypeMapping::lossy(
             "nvarchar(100)",
@@ -925,7 +925,7 @@ fn mysql_to_mssql(mysql_type: &str, max_length: i32, precision: i32, scale: i32)
         // Date/time types
         "date" => TypeMapping::lossless("date"),
         "time" => TypeMapping::lossless("time"),
-        "datetime" | "timestamp" => TypeMapping::lossless("datetime2"),
+        "datetime" | "timestamp" => TypeMapping::lossless("datetime"),
         "year" => TypeMapping::lossless("smallint"),
 
         // JSON (stored as nvarchar)
@@ -1305,7 +1305,7 @@ impl FromCanonical for MssqlFromCanonical {
             // Date/time types
             CanonicalType::Date => TypeMapping::lossless("date"),
             CanonicalType::Time => TypeMapping::lossless("time"),
-            CanonicalType::DateTime => TypeMapping::lossless("datetime2"),
+            CanonicalType::DateTime => TypeMapping::lossless("datetime"),
             CanonicalType::DateTimeTz => TypeMapping::lossless("datetimeoffset"),
             CanonicalType::Interval => TypeMapping::lossy(
                 "nvarchar(100)",
