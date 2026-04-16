@@ -25,3 +25,14 @@ migration:
   target_mode: upsert
   workers: 4
   chunk_size: 50000
+  # Enables incremental sync at the source: only rows where
+  # the first matching column > last_sync_timestamp are fetched.
+  # Order matters — most-recently-modified columns first.
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date

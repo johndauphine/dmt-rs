@@ -22,3 +22,13 @@ migration:
   target_mode: upsert
   workers: 4
   chunk_size: 50000
+  # Source-side incremental filter: most-recently-modified columns first.
+  # Hash parity with the matching drop_recreate config preserves watermarks.
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date
