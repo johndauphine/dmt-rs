@@ -53,8 +53,16 @@ impl Config {
     }
 
     /// Compute a SHA256 hash of the configuration for resume validation.
+    ///
+    /// `target_mode` is intentionally excluded from the hash: it describes the
+    /// *strategy* for reaching target state, not the identity of the pipeline.
+    /// Canonicalizing it lets state survive a switch between drop_recreate and
+    /// upsert, so a watermark seeded by drop_recreate remains visible to a
+    /// subsequent upsert against the same source/target/tables.
     pub fn hash(&self) -> String {
-        let yaml = serde_yaml::to_string(self).unwrap_or_default();
+        let mut canonical = self.clone();
+        canonical.migration.target_mode = TargetMode::default();
+        let yaml = serde_yaml::to_string(&canonical).unwrap_or_default();
         let mut hasher = Sha256::new();
         hasher.update(yaml.as_bytes());
         format!("{:x}", hasher.finalize())
@@ -309,6 +317,30 @@ migration:
             json_config.migration.chunk_size,
             yaml_config.migration.chunk_size
         );
+    }
+
+    #[test]
+    fn test_hash_ignores_target_mode() {
+        // Two configs identical except for target_mode must hash identically,
+        // so a watermark seeded by drop_recreate is visible to a subsequent
+        // upsert against the same source/target/tables.
+        let mut drop_cfg = Config::from_yaml(VALID_YAML).unwrap();
+        drop_cfg.migration.target_mode = TargetMode::DropRecreate;
+        let mut upsert_cfg = Config::from_yaml(VALID_YAML).unwrap();
+        upsert_cfg.migration.target_mode = TargetMode::Upsert;
+
+        assert_eq!(drop_cfg.hash(), upsert_cfg.hash());
+    }
+
+    #[test]
+    fn test_hash_changes_with_other_fields() {
+        // Sanity check: changes to identity-bearing fields still affect the hash,
+        // so we haven't accidentally made the hash a no-op.
+        let base = Config::from_yaml(VALID_YAML).unwrap();
+        let mut other_db = Config::from_yaml(VALID_YAML).unwrap();
+        other_db.target.database = "different_target".to_string();
+
+        assert_ne!(base.hash(), other_db.hash());
     }
 
     #[test]
