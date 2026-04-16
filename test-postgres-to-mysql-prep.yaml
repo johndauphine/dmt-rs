@@ -14,6 +14,7 @@ target:
   host: localhost
   port: 3307
   database: stackoverflow_target
+  schema: stackoverflow_target
   user: root
   password: "rootpassword"
 

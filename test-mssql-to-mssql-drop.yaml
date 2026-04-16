@@ -1,4 +1,4 @@
-# Test: MSSQL → MSSQL (drop_recreate mode)
+# Test: MSSQL → MSSQL (drop_recreate)
 source:
   type: mssql
   host: localhost
@@ -14,7 +14,7 @@ target:
   type: mssql
   host: localhost
   port: 1434
-  database: stackoverflow_test_mssql
+  database: stackoverflow_target
   user: sa
   password: "TestPass2024"
   schema: dbo
@@ -25,9 +25,7 @@ migration:
   target_mode: drop_recreate
   workers: 4
   chunk_size: 50000
-  # Listed for hash parity with the matching upsert config so state
-  # (including last_sync_timestamp seeded by drop_recreate) carries across
-  # a mode switch. Drop_recreate itself ignores this field.
+  # Listed for hash parity with matching upsert config
   date_updated_columns:
     - LastActivityDate
     - LastAccessDate

@@ -1,4 +1,4 @@
-# Test: MSSQL → PostgreSQL (upsert mode)
+# Test: MSSQL → PostgreSQL (upsert)
 source:
   type: mssql
   host: localhost
@@ -13,18 +13,18 @@ source:
 target:
   type: postgres
   host: localhost
-  port: 5433
-  database: stackoverflow_test
-  schema: public
+  port: 5434
+  database: stackoverflow_target
   user: postgres
-  password: PostgresPassword123
+  password: "TestPass2024"
+  schema: public
+  ssl_mode: disable
 
 migration:
   target_mode: upsert
   workers: 4
   chunk_size: 50000
-  # Source-side incremental filter: most-recently-modified columns first.
-  # Hash parity with the matching drop_recreate config preserves watermarks.
+  # Source-side incremental filter
   date_updated_columns:
     - LastActivityDate
     - LastAccessDate
