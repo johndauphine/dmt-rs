@@ -867,6 +867,79 @@ that's where the interesting findings live.
 
 ---
 
+## 11. Incremental upsert after drop_recreate (PR #108, 2026-04-16)
+
+§1's `mssql → mssql` 98.6 s number measured a single `drop_recreate` run.
+Real workflows are ongoing: drop once, then keep up with source changes
+via repeated `upsert` runs. Before PR #108, the *first* upsert after a
+drop paid a full ~85 s tax (running staging+MERGE over every row even
+when nothing had changed) because the upsert config hashed differently
+from the drop config and started a new state lineage. Now both modes
+share a `config_hash`, so the upsert inherits the watermarks the drop
+seeded.
+
+### What you need
+
+Both configs (drop and upsert) must:
+
+1. Be **identical except for `target_mode`**. Different
+   `chunk_size`/`workers` will hash differently and break inheritance.
+2. Have `migration.date_updated_columns` populated with source-side
+   columns the engine can use for `WHERE date_col > last_sync`. Lookup
+   tables without a date column gracefully fall back to full scan.
+
+Example fragment (works against SO2010):
+
+```yaml
+migration:
+  target_mode: upsert   # or drop_recreate — only this differs between the two configs
+  workers: 4
+  chunk_size: 50000
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date
+```
+
+Order matters — `find_date_column` picks the first match per table, so
+list the most recently-modified columns first.
+
+### Expected timing (M5 Pro 24 GB, 12 GiB Docker VM, container caps from §4.5)
+
+| Step | Duration | What's happening |
+|---|---:|---|
+| `drop_recreate` (cold) | ~37–40 s | Full BULK INSERT, seeds watermarks |
+| `upsert` immediately after, **no** source changes | **~6 s** | Source-filter returns 0 rows for 7 tables; 3 lookup tables (~25 rows) full-scan |
+| `upsert` after a few thousand new source rows | ≤ a couple seconds | Only the new rows traverse staging+MERGE |
+
+If the post-drop upsert still takes 60+ s, check:
+
+1. `SELECT DISTINCT LEFT(config_hash, 16) FROM _dmt_rs.table_state` —
+   should return **one** row, not two. Two rows means the configs hash
+   differently; diff them outside `target_mode`.
+2. Log lines should say `incremental sync from <ts> using <column>` for
+   tables that have a date column. If you only see `first sync (full
+   load)`, the watermark wasn't found — likely the configs were
+   different prior to PR #108 and the state pre-dates the fix.
+   Workaround: drop the `_dmt_rs` schema in the target and rerun the
+   drop.
+3. `no matching date column` warnings on big tables mean the column
+   isn't in your `date_updated_columns` list — add it and rerun.
+
+### Why this matters for the §1 baseline
+
+The §1 numbers are still useful for "cold drop_recreate" and worst-case
+"first-time upsert" planning, but they overstate the cost of routine
+incremental syncs. The intended steady state is `drop once, upsert
+repeatedly`, and the steady-state upsert cost is single-digit seconds
+not minutes.
+
+---
+
 ## Related docs
 
 - [`benchmark-results-m3-max.md`](benchmark-results-m3-max.md) — actual M3 Max 36 GB results + the corrected target-write-pattern model
