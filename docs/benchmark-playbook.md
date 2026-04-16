@@ -173,7 +173,7 @@ Linux looks for its data files.
 docker run -d --name mssql-source \
   -p 1433:1433 \
   -e ACCEPT_EULA=Y \
-  -e MSSQL_SA_PASSWORD='YourStrong@Passw0rd' \
+  -e MSSQL_SA_PASSWORD='TestPass2024' \
   --memory=8g --memory-swap=8g \
   --platform linux/amd64 \
   -v /path/to/mssql-bench:/var/opt/mssql \
@@ -184,7 +184,7 @@ Wait for readiness:
 
 ```bash
 until docker exec mssql-source /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C \
+  -S localhost -U sa -P 'TestPass2024' -C \
   -Q "SELECT name FROM sys.databases WHERE name='StackOverflow2010'" \
   -h -1 2>&1 | grep -q 'StackOverflow2010'; do
   echo "waiting for mssql-source..."
@@ -206,8 +206,8 @@ echo "mssql-source ready"
 >   --platform linux/amd64 \
 >   --entrypoint /opt/mssql/bin/mssql-conf \
 >   mcr.microsoft.com/mssql/server:2022-latest \
->   set-sa-password <<< 'YourStrong@Passw0rd
-> YourStrong@Passw0rd'
+>   set-sa-password <<< 'TestPass2024
+> TestPass2024'
 > docker start mssql-source
 > ```
 >
@@ -223,13 +223,13 @@ port, no volume mount so it inits cleanly with `MSSQL_SA_PASSWORD`:
 docker run -d --name mssql-target \
   -p 1434:1433 \
   -e ACCEPT_EULA=Y \
-  -e MSSQL_SA_PASSWORD='YourStrong@Passw0rd' \
+  -e MSSQL_SA_PASSWORD='TestPass2024' \
   --memory=8g --memory-swap=8g \
   --platform linux/amd64 \
   mcr.microsoft.com/mssql/server:2022-latest
 
 until docker exec mssql-target /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C \
+  -S localhost -U sa -P 'TestPass2024' -C \
   -Q "SELECT @@VERSION" -h -1 2>&1 | grep -q "Microsoft SQL Server"; do
   echo "waiting for mssql-target..."
   sleep 3
@@ -277,7 +277,7 @@ simplest):
 ```bash
 for container in mssql-source mssql-target; do
   docker exec $container /opt/mssql-tools18/bin/sqlcmd \
-    -S localhost -U sa -P 'YourStrong@Passw0rd' -C -Q "
+    -S localhost -U sa -P 'TestPass2024' -C -Q "
     EXEC sp_configure 'show advanced options', 1; RECONFIGURE;
     EXEC sp_configure 'max server memory (MB)', 6144; RECONFIGURE WITH OVERRIDE;
     EXEC sp_configure 'network packet size (B)', 32767; RECONFIGURE WITH OVERRIDE;
@@ -354,7 +354,7 @@ source:
   database: StackOverflow2010
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -395,7 +395,7 @@ target:
   database: dmt_test_target
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -416,7 +416,7 @@ source:
   database: StackOverflow2010
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -427,7 +427,7 @@ target:
   database: dmt_test_target
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -456,7 +456,7 @@ source:
   database: StackOverflow2010
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 target:
@@ -489,7 +489,7 @@ docker exec pg-target psql -U postgres \
   -c "CREATE DATABASE dmt_test_target;"
 # or for MSSQL target:
 docker exec mssql-target /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C \
+  -S localhost -U sa -P 'TestPass2024' -C \
   -Q "IF DB_ID('dmt_test_target') IS NOT NULL DROP DATABASE dmt_test_target; CREATE DATABASE dmt_test_target;"
 
 # 2. Health check
@@ -535,7 +535,7 @@ ORDER BY table_completed_at;
 
 # For MSSQL targets
 docker exec mssql-target /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C -d dmt_test_target -Q "
+  -S localhost -U sa -P 'TestPass2024' -C -d dmt_test_target -Q "
 SELECT table_name, rows_total, rows_transferred, table_status
 FROM _dmt_rs.table_state
 WHERE run_id = (SELECT TOP 1 run_id FROM _dmt_rs.table_state

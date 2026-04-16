@@ -61,8 +61,12 @@ impl Config {
     /// subsequent upsert against the same source/target/tables.
     pub fn hash(&self) -> String {
         let mut canonical = self.clone();
-        canonical.migration.target_mode = TargetMode::default();
-        let yaml = serde_yaml::to_string(&canonical).unwrap_or_default();
+        // Pinned to DropRecreate (not TargetMode::default()) so the hash
+        // remains stable even if the enum's #[default] changes in a future
+        // version — changing this value would orphan all stored state rows.
+        canonical.migration.target_mode = TargetMode::DropRecreate;
+        let yaml = serde_yaml::to_string(&canonical)
+            .expect("failed to serialize canonical configuration for hashing");
         let mut hasher = Sha256::new();
         hasher.update(yaml.as_bytes());
         format!("{:x}", hasher.finalize())

@@ -32,7 +32,7 @@ Prerequisites:
 - Rust 1.88+ (mssql-client requires Rust 2024 edition)
 - Brent Ozar's `StackOverflow2010` database loaded into a SQL Server 2022 container, with `dbo.Posts` populated
 
-The local instance used for this spike was at `~/docker-data/mssql-bench/` with the SA password set to `YourStrong@Passw0rd` (matches all `test-mssql-*.yaml` configs in this repo). To reproduce:
+The local instance used for this spike was at `~/docker-data/mssql-bench/` with the SA password set to `TestPass2024` (matches all `test-mssql-*.yaml` configs in this repo). To reproduce:
 
 ```bash
 docker run -d --name mssql-spike \
@@ -51,8 +51,8 @@ docker run --rm -i -e ACCEPT_EULA=Y \
   --platform linux/amd64 \
   --entrypoint /opt/mssql/bin/mssql-conf \
   mcr.microsoft.com/mssql/server:2022-latest \
-  set-sa-password <<< 'YourStrong@Passw0rd
-YourStrong@Passw0rd'
+  set-sa-password <<< 'TestPass2024
+TestPass2024'
 ```
 
 Then create the standalone spike project (intentionally outside the workspace — it needs Rust 2024, the workspace is on 2021):
@@ -212,7 +212,7 @@ use sha2::{Digest, Sha256};
 const CONNECTION_STRING: &str = "Server=localhost,1433;\
                                  Database=StackOverflow2010;\
                                  User Id=sa;\
-                                 Password=YourStrong@Passw0rd;\
+                                 Password=TestPass2024;\
                                  TrustServerCertificate=true;\
                                  Encrypt=false;\
                                  Packet Size=32767;";
