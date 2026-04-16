@@ -14,7 +14,7 @@ target:
   port: 1434
   database: stackoverflow_test_mssql2
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   schema: dbo
   encrypt: false
   trust_server_cert: true
