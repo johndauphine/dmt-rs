@@ -173,7 +173,7 @@ Linux looks for its data files.
 docker run -d --name mssql-source \
   -p 1433:1433 \
   -e ACCEPT_EULA=Y \
-  -e MSSQL_SA_PASSWORD='YourStrong@Passw0rd' \
+  -e MSSQL_SA_PASSWORD='TestPass2024' \
   --memory=8g --memory-swap=8g \
   --platform linux/amd64 \
   -v /path/to/mssql-bench:/var/opt/mssql \
@@ -184,7 +184,7 @@ Wait for readiness:
 
 ```bash
 until docker exec mssql-source /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C \
+  -S localhost -U sa -P 'TestPass2024' -C \
   -Q "SELECT name FROM sys.databases WHERE name='StackOverflow2010'" \
   -h -1 2>&1 | grep -q 'StackOverflow2010'; do
   echo "waiting for mssql-source..."
@@ -206,8 +206,8 @@ echo "mssql-source ready"
 >   --platform linux/amd64 \
 >   --entrypoint /opt/mssql/bin/mssql-conf \
 >   mcr.microsoft.com/mssql/server:2022-latest \
->   set-sa-password <<< 'YourStrong@Passw0rd
-> YourStrong@Passw0rd'
+>   set-sa-password <<< 'TestPass2024
+> TestPass2024'
 > docker start mssql-source
 > ```
 >
@@ -223,13 +223,13 @@ port, no volume mount so it inits cleanly with `MSSQL_SA_PASSWORD`:
 docker run -d --name mssql-target \
   -p 1434:1433 \
   -e ACCEPT_EULA=Y \
-  -e MSSQL_SA_PASSWORD='YourStrong@Passw0rd' \
+  -e MSSQL_SA_PASSWORD='TestPass2024' \
   --memory=8g --memory-swap=8g \
   --platform linux/amd64 \
   mcr.microsoft.com/mssql/server:2022-latest
 
 until docker exec mssql-target /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C \
+  -S localhost -U sa -P 'TestPass2024' -C \
   -Q "SELECT @@VERSION" -h -1 2>&1 | grep -q "Microsoft SQL Server"; do
   echo "waiting for mssql-target..."
   sleep 3
@@ -277,7 +277,7 @@ simplest):
 ```bash
 for container in mssql-source mssql-target; do
   docker exec $container /opt/mssql-tools18/bin/sqlcmd \
-    -S localhost -U sa -P 'YourStrong@Passw0rd' -C -Q "
+    -S localhost -U sa -P 'TestPass2024' -C -Q "
     EXEC sp_configure 'show advanced options', 1; RECONFIGURE;
     EXEC sp_configure 'max server memory (MB)', 6144; RECONFIGURE WITH OVERRIDE;
     EXEC sp_configure 'network packet size (B)', 32767; RECONFIGURE WITH OVERRIDE;
@@ -354,7 +354,7 @@ source:
   database: StackOverflow2010
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -395,7 +395,7 @@ target:
   database: dmt_test_target
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -416,7 +416,7 @@ source:
   database: StackOverflow2010
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -427,7 +427,7 @@ target:
   database: dmt_test_target
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 
@@ -456,7 +456,7 @@ source:
   database: StackOverflow2010
   schema: dbo
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   encrypt: false
   trust_server_cert: true
 target:
@@ -489,7 +489,7 @@ docker exec pg-target psql -U postgres \
   -c "CREATE DATABASE dmt_test_target;"
 # or for MSSQL target:
 docker exec mssql-target /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C \
+  -S localhost -U sa -P 'TestPass2024' -C \
   -Q "IF DB_ID('dmt_test_target') IS NOT NULL DROP DATABASE dmt_test_target; CREATE DATABASE dmt_test_target;"
 
 # 2. Health check
@@ -535,7 +535,7 @@ ORDER BY table_completed_at;
 
 # For MSSQL targets
 docker exec mssql-target /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P 'YourStrong@Passw0rd' -C -d dmt_test_target -Q "
+  -S localhost -U sa -P 'TestPass2024' -C -d dmt_test_target -Q "
 SELECT table_name, rows_total, rows_transferred, table_status
 FROM _dmt_rs.table_state
 WHERE run_id = (SELECT TOP 1 run_id FROM _dmt_rs.table_state
@@ -864,6 +864,79 @@ file so the summary stays coherent.
 If any reading differs from the §2 target-write-pattern model's
 prediction by more than 30%, investigate before declaring the result —
 that's where the interesting findings live.
+
+---
+
+## 11. Incremental upsert after drop_recreate (PR #108, 2026-04-16)
+
+§1's `mssql → mssql` 98.6 s number measured a single `drop_recreate` run.
+Real workflows are ongoing: drop once, then keep up with source changes
+via repeated `upsert` runs. Before PR #108, the *first* upsert after a
+drop paid a full ~85 s tax (running staging+MERGE over every row even
+when nothing had changed) because the upsert config hashed differently
+from the drop config and started a new state lineage. Now both modes
+share a `config_hash`, so the upsert inherits the watermarks the drop
+seeded.
+
+### What you need
+
+Both configs (drop and upsert) must:
+
+1. Be **identical except for `target_mode`**. Different
+   `chunk_size`/`workers` will hash differently and break inheritance.
+2. Have `migration.date_updated_columns` populated with source-side
+   columns the engine can use for `WHERE date_col > last_sync`. Lookup
+   tables without a date column gracefully fall back to full scan.
+
+Example fragment (works against SO2010):
+
+```yaml
+migration:
+  target_mode: upsert   # or drop_recreate — only this differs between the two configs
+  workers: 4
+  chunk_size: 50000
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date
+```
+
+Order matters — `find_date_column` picks the first match per table, so
+list the most recently-modified columns first.
+
+### Expected timing (M5 Pro 24 GB, 12 GiB Docker VM, container caps from §4.5)
+
+| Step | Duration | What's happening |
+|---|---:|---|
+| `drop_recreate` (cold) | ~37–40 s | Full BULK INSERT, seeds watermarks |
+| `upsert` immediately after, **no** source changes | **~6 s** | Source-filter returns 0 rows for 7 tables; 3 lookup tables (~25 rows) full-scan |
+| `upsert` after a few thousand new source rows | ≤ a couple seconds | Only the new rows traverse staging+MERGE |
+
+If the post-drop upsert still takes 60+ s, check:
+
+1. `SELECT DISTINCT LEFT(config_hash, 16) FROM _dmt_rs.table_state` —
+   should return **one** row, not two. Two rows means the configs hash
+   differently; diff them outside `target_mode`.
+2. Log lines should say `incremental sync from <ts> using <column>` for
+   tables that have a date column. If you only see `first sync (full
+   load)`, the watermark wasn't found — likely the configs were
+   different prior to PR #108 and the state pre-dates the fix.
+   Workaround: drop the `_dmt_rs` schema in the target and rerun the
+   drop.
+3. `no matching date column` warnings on big tables mean the column
+   isn't in your `date_updated_columns` list — add it and rerun.
+
+### Why this matters for the §1 baseline
+
+The §1 numbers are still useful for "cold drop_recreate" and worst-case
+"first-time upsert" planning, but they overstate the cost of routine
+incremental syncs. The intended steady state is `drop once, upsert
+repeatedly`, and the steady-state upsert cost is single-digit seconds
+not minutes.
 
 ---
 

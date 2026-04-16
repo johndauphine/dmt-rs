@@ -9,6 +9,34 @@ Comprehensive benchmark results comparing Rust and Go implementations.
 > [`docs/benchmark-go-vs-dmt-rs.md`](docs/benchmark-go-vs-dmt-rs.md) for
 > the current data.
 
+## Latest: incremental upsert after drop_recreate (PR #108, 2026-04-16)
+
+`Config::hash()` no longer includes `target_mode`, so a `drop_recreate`
+followed by an `upsert` against the same source/target inherits the
+watermarks the drop seeded. With `date_updated_columns` configured, the
+upsert filters at the source and returns essentially zero rows on
+unchanged data.
+
+| Scenario (MSSQL→MSSQL, SO2010, 19.3 M rows, M5 Pro 24 GB, 12 GiB Docker VM) | Before PR #108 | After PR #108 |
+|---|---:|---:|
+| `drop_recreate` (cold) | 37.8 s @ 511 K rows/s | 37.8 s @ 511 K rows/s (unchanged) |
+| `upsert` immediately following, no source changes | **85 s @ 227 K rows/s** | **5.9 s, 17 rows touched** |
+
+The 5.9 s residual is the three small lookup tables
+(`LinkTypes`/`PostTypes`/`VoteTypes`) that have no date column and
+correctly fall back to a full scan. Every other table reports
+`incremental sync from <ts> using <column>` and transfers zero rows.
+
+Container tuning applied for these numbers (see
+[`benchmark-playbook.md`](docs/benchmark-playbook.md) §4 / `docker_container_tuning`):
+
+- `mssql-bench` and `mssql-target`: `--memory=5g --memory-swap=5g`,
+  `max server memory (MB) = 4096`
+- `mysql-bench`, `pg-bench`, `pg-target`: `--memory=3g --memory-swap=3g`
+- Two-containers-at-a-time rule enforced (only the active source/target
+  pair runs)
+
+
 ## Test Environment
 
 - **Hardware**: Apple M3 Max, 36GB RAM, 14 CPU cores

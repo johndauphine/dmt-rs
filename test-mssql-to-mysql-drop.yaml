@@ -5,7 +5,7 @@ source:
   port: 1433
   database: StackOverflow2010
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   schema: dbo
   encrypt: false
   trust_server_cert: true
@@ -23,3 +23,13 @@ migration:
   target_mode: drop_recreate
   workers: 4
   chunk_size: 50000
+  # Listed for hash parity with the matching upsert config so state survives a
+  # mode switch. find_date_column is case-insensitive and skips missing columns.
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date

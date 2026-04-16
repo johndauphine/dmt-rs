@@ -202,9 +202,35 @@ migration:
   parallel_writers: 6
   max_mssql_connections: 48
   max_pg_connections: 36
+  # Source-side incremental filter — most-recently-modified columns first.
+  # find_date_column picks the first match per table and is case-insensitive.
+  # Tables without a matching column fall back to full scan.
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date
 ```
 
 **Note**: Upsert mode uses a staging table approach: rows are COPY'd to a temp table using binary protocol, then merged into the target with `INSERT...ON CONFLICT DO UPDATE SET`. This is 2-3x faster than row-by-row upserts.
+
+### Incremental Sync Best Practice: Drop Once, Upsert Repeatedly
+
+The recommended workflow is:
+
+1. **Initial load**: run with `target_mode: drop_recreate` to populate the target and seed watermarks.
+2. **Ongoing syncs**: switch to `target_mode: upsert` with `date_updated_columns` configured. dmt-rs filters at the source (`WHERE date_col > last_sync_timestamp`), fetching only rows modified since the last run.
+
+Both configs must be **identical except for `target_mode`** — `config_hash` (used to look up state) is computed from the serialized config with `target_mode` excluded, so all other fields must match for watermarks to carry across.
+
+On a 19.3 M-row MSSQL→MSSQL test set (SO2010, Apple Silicon, containers at 4 GiB `max server memory`):
+- Drop: ~38 s
+- Immediate upsert (no source changes): **~6 s** (only lookup tables without a date column full-scan)
+
+Without `date_updated_columns`, the upsert has no source-side filter and must re-merge every row through the staging table, costing ~85 s on the same data — a 14× slowdown for zero useful work.
 
 ## Troubleshooting
 

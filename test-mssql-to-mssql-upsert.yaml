@@ -5,7 +5,7 @@ source:
   port: 1433
   database: StackOverflow2010
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   schema: dbo
   encrypt: false
   trust_server_cert: true
@@ -16,7 +16,7 @@ target:
   port: 1434
   database: stackoverflow_test_mssql
   user: sa
-  password: "YourStrong@Passw0rd"
+  password: "TestPass2024"
   schema: dbo
   encrypt: false
   trust_server_cert: true
@@ -25,3 +25,14 @@ migration:
   target_mode: upsert
   workers: 4
   chunk_size: 50000
+  # Enables incremental sync at the source: only rows where
+  # the first matching column > last_sync_timestamp are fetched.
+  # Order matters — most-recently-modified columns first.
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date
