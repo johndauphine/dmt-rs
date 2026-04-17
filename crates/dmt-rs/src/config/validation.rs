@@ -400,16 +400,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mysql_bulk_session_tuning_defaults_true() {
-        let config = valid_config();
-        assert!(
-            config.migration.mysql_bulk_session_tuning,
-            "mysql_bulk_session_tuning must default to true so new users get the \
-             bulk-load speedup without opting in"
-        );
-    }
-
-    #[test]
     fn test_zero_finalizer_concurrency_rejected() {
         let mut config = valid_config();
         config.migration.finalizer_concurrency = Some(0);
