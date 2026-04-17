@@ -25,10 +25,22 @@ if [ ! -x "$BINARY" ]; then
   exit 1
 fi
 
-MYSQL_CMD=(docker exec -i mysql-target mysql -uroot -pTestPass2024 -N -B)
+# Local benchmark default only. Override with MYSQL_ROOT_PASSWORD if your
+# mysql-target container uses a different password. Passed via MYSQL_PWD in
+# the container env rather than on the mysql(1) command line so it doesn't
+# leak to the container's /proc/<pid>/cmdline.
+MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-TestPass2024}"
+MYSQL_CMD=(docker exec -i -e "MYSQL_PWD=$MYSQL_ROOT_PASSWORD" mysql-target mysql -uroot -N -B)
 
 reset_target() {
   "${MYSQL_CMD[@]}" -e "DROP DATABASE IF EXISTS stackoverflow_target; CREATE DATABASE stackoverflow_target CHARACTER SET utf8mb4;" 2>/dev/null
+}
+
+# Portable high-resolution wall clock in seconds. macOS/BSD `date` doesn't
+# support `%N`, so we reach for python3 which is present on every dev host
+# we build on.
+now_sec() {
+  python3 -c 'import time; print(time.time())'
 }
 
 parse_metric() {
@@ -46,9 +58,9 @@ run_one() {
   reset_target
 
   local start end wall
-  start=$(date +%s.%N)
+  start=$(now_sec)
   "$BINARY" -c "$config" run >"$log" 2>&1
-  end=$(date +%s.%N)
+  end=$(now_sec)
   wall=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.2f", e - s }')
 
   local duration_raw throughput_raw rows_raw
