@@ -236,8 +236,12 @@ impl SourcePoolImpl {
             // MySQL/MariaDB source - uses SQLx
             #[cfg(feature = "mysql")]
             {
-                mysql_info!("Creating MySQL source connection pool");
-                let reader = MysqlReader::new(&config.source, pool_size as usize).await?;
+                let mysql_pool_size = config.migration.get_max_mysql_connections();
+                mysql_info!(
+                    "Creating MySQL source connection pool (size={})",
+                    mysql_pool_size
+                );
+                let reader = MysqlReader::new(&config.source, mysql_pool_size).await?;
                 Ok(Self::Mysql(Arc::new(reader)))
             }
             #[cfg(not(feature = "mysql"))]
@@ -566,10 +570,19 @@ impl TargetPoolImpl {
             #[cfg(feature = "mysql")]
             {
                 use crate::dialect::{MssqlToMysqlMapper, PostgresToMysqlMapper};
-                mysql_info!("Creating MySQL target connection pool");
-                let writer =
-                    MysqlWriter::new(&config.target, max_conns, config.migration.mysql_load_data)
-                        .await?;
+                let mysql_pool_size = config.migration.get_max_mysql_connections();
+                mysql_info!(
+                    "Creating MySQL target connection pool (size={}, bulk_session_tuning={})",
+                    mysql_pool_size,
+                    config.migration.mysql_bulk_session_tuning
+                );
+                let writer = MysqlWriter::new(
+                    &config.target,
+                    mysql_pool_size,
+                    config.migration.mysql_load_data,
+                    config.migration.mysql_bulk_session_tuning,
+                )
+                .await?;
                 // Add type mapper based on source database type
                 let source_type = config.source.r#type.to_lowercase();
                 let writer = if source_type == "postgres"

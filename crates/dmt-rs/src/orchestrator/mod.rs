@@ -468,6 +468,8 @@ impl Orchestrator {
                 source_db_type,
                 #[cfg(feature = "mysql")]
                 self.config.migration.mysql_load_data,
+                #[cfg(feature = "mysql")]
+                self.config.migration.mysql_bulk_session_tuning,
             )
             .await
     }
