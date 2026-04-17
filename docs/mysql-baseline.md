@@ -4,6 +4,15 @@ This is dmt-rs's first published performance baseline for a **MySQL target**.
 Prior benchmarks in the repo (`BENCHMARKS.md`, `benchmark-results-m3-max.md`)
 only cover MSSQL↔PostgreSQL.
 
+> **Update:** the numbers below were measured against a stock `mysql:8.0`
+> container with the 128 MB default InnoDB buffer pool. A tuned container
+> is ~**2.5× faster** across every variant we measured, and the tuning A/B
+> effects reported below **evaporate** (become noise) when the container
+> is no longer buffer-pool-starved. See
+> [`docs/mysql-target-container.md`](mysql-target-container.md) for the
+> tuned numbers and the `my.cnf` that produces them. The analysis in this
+> document remains accurate for stock MySQL targets.
+
 ## TL;DR
 
 On the default data-warehouse-style config (no secondary indexes, no foreign
@@ -210,16 +219,26 @@ modern I/O capacity defaults) is probably a bigger speedup than
 anything we can do in application code, and would also give the
 session-tuning A/B a cleaner signal.
 
-That's tracked as the next follow-up; not in scope for this PR.
+**Confirmed.** See [`docs/mysql-target-container.md`](mysql-target-container.md):
+the tuned container is ~2.5× faster across every variant, and the
+tuning A/B delta collapses to ≤2% (inside noise). The change-buffer
+bookkeeping hypothesis was right — give InnoDB enough memory and it
+stops showing up.
 
-### Recommendation re: the default
+### Recommendation re: the default — superseded
 
-Weak but leaning **flip the default to `false`**: the 14% cost on the
-common-case config is measured and real, while the gain on the
-full-schema config is not confirmed. A cleaner fix is to leave the
-default `false` and have the finalize phase set
-`foreign_key_checks = 0` inside the specific transactions that run
-`ADD CONSTRAINT FOREIGN KEY` / `ADD UNIQUE INDEX`, so the win is
-narrow-scoped to where it pays. That's a code change deferred to its
-own PR.
+Originally this section recommended flipping `mysql_bulk_session_tuning`
+to `false` because of the 14 % stock-container cost. The tuned-container
+numbers change the calculus:
+
+* On stock MySQL: tuning-on loses 14 %. Real, measured, reproducible.
+* On tuned MySQL: tuning-on vs tuning-off is ~1 %. Noise.
+
+So the right guidance is **tune the container, don't flip the default**.
+A user running stock mysql is leaving 2.5× of throughput on the table
+regardless of how `mysql_bulk_session_tuning` is set; the session-tuning
+knob is a rounding error compared to the container knobs.
+
+No code change needed. Documented in
+[`docs/mysql-target-container.md`](mysql-target-container.md).
 
