@@ -1,0 +1,26 @@
+source:
+  type: mssql
+  host: localhost
+  port: 1433
+  database: StackOverflow2010
+  user: sa
+  password: "TestPass2024"
+  schema: dbo
+  encrypt: false
+  trust_server_cert: true
+
+target:
+  type: mysql
+  host: localhost
+  port: 3307
+  database: stackoverflow_target
+  schema: stackoverflow_target
+  user: root
+  password: "TestPass2024"
+  ssl_mode: disable
+
+migration:
+  target_mode: drop_recreate
+  workers: 4
+  chunk_size: 50000
+  mysql_bulk_session_tuning: true
