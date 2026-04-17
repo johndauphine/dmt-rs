@@ -1,17 +1,19 @@
-# Test: MySQL → MSSQL (upsert mode)
+# Test: MySQL → MSSQL (upsert)
 source:
   type: mysql
   host: localhost
   port: 3306
-  database: stackoverflow_test
+  database: stackoverflow
+  schema: stackoverflow
   user: root
-  password: "MySqlPassword123"
+  password: "TestPass2024"
+  ssl_mode: disable
 
 target:
   type: mssql
   host: localhost
   port: 1434
-  database: stackoverflow_test_mssql2
+  database: stackoverflow_target
   user: sa
   password: "TestPass2024"
   schema: dbo
@@ -22,8 +24,7 @@ migration:
   target_mode: upsert
   workers: 4
   chunk_size: 50000
-  # Source-side incremental filter: most-recently-modified columns first.
-  # Hash parity with the matching drop_recreate config preserves watermarks.
+  # Source-side incremental filter
   date_updated_columns:
     - LastActivityDate
     - LastAccessDate

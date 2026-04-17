@@ -1,18 +1,19 @@
-# Test: MySQL → MSSQL (drop_recreate mode)
-# Note: First we need to populate MySQL from PostgreSQL
+# Test: MySQL → MSSQL (drop_recreate)
 source:
   type: mysql
   host: localhost
   port: 3306
-  database: stackoverflow_test
+  database: stackoverflow
+  schema: stackoverflow
   user: root
-  password: "MySqlPassword123"
+  password: "TestPass2024"
+  ssl_mode: disable
 
 target:
   type: mssql
   host: localhost
   port: 1434
-  database: stackoverflow_test_mssql2
+  database: stackoverflow_target
   user: sa
   password: "TestPass2024"
   schema: dbo
@@ -23,8 +24,7 @@ migration:
   target_mode: drop_recreate
   workers: 4
   chunk_size: 50000
-  # Listed for hash parity with the matching upsert config so state survives a
-  # mode switch. find_date_column is case-insensitive and skips missing columns.
+  # Listed for hash parity with matching upsert config
   date_updated_columns:
     - LastActivityDate
     - LastAccessDate

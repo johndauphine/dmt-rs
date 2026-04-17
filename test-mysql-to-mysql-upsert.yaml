@@ -1,21 +1,34 @@
-# Test: MySQL → MySQL (upsert mode)
+# Test: MySQL → MySQL (upsert)
 source:
   type: mysql
   host: localhost
-  port: 3307
-  database: stackoverflow_target
+  port: 3306
+  database: stackoverflow
+  schema: stackoverflow
   user: root
-  password: "rootpassword"
+  password: "TestPass2024"
+  ssl_mode: disable
 
 target:
   type: mysql
   host: localhost
   port: 3307
-  database: stackoverflow_test2
+  database: stackoverflow_target
+  schema: stackoverflow_target
   user: root
-  password: "rootpassword"
+  password: "TestPass2024"
+  ssl_mode: disable
 
 migration:
   target_mode: upsert
   workers: 4
   chunk_size: 50000
+  # Source-side incremental filter
+  date_updated_columns:
+    - LastActivityDate
+    - LastAccessDate
+    - LastEditDate
+    - ModifiedDate
+    - UpdatedAt
+    - CreationDate
+    - Date

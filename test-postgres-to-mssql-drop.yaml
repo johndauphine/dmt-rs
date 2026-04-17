@@ -1,19 +1,19 @@
-# Test: PostgreSQL → MSSQL (drop_recreate mode)
+# Test: PostgreSQL → MSSQL (drop_recreate)
 source:
   type: postgres
   host: localhost
-  port: 5433
+  port: 5432
   database: stackoverflow
-  schema: public
   user: postgres
-  password: PostgresPassword123
+  password: "TestPass2024"
+  schema: public
   ssl_mode: disable
 
 target:
   type: mssql
   host: localhost
   port: 1434
-  database: stackoverflow_test_mssql3
+  database: stackoverflow_target
   user: sa
   password: "TestPass2024"
   schema: dbo
@@ -24,8 +24,7 @@ migration:
   target_mode: drop_recreate
   workers: 4
   chunk_size: 50000
-  # Listed for hash parity with the matching upsert config so state survives a
-  # mode switch. find_date_column is case-insensitive and skips missing columns.
+  # Listed for hash parity with matching upsert config
   date_updated_columns:
     - LastActivityDate
     - LastAccessDate
