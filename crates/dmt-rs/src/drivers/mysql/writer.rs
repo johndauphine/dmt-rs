@@ -121,6 +121,29 @@ impl MysqlWriter {
             .await
             .map_err(|e| MigrateError::pool(e, "testing MySQL target connection"))?;
 
+        // Pre-flight probe: LOAD DATA LOCAL INFILE streams rows into the server
+        // before the server decides whether to accept them. If `local_infile` is
+        // off, the batch is irrecoverably consumed — so we must refuse to start
+        // when the user opted into LOAD DATA but the server has it disabled.
+        if mysql_load_data == MysqlLoadData::Always {
+            let local_infile: Option<u8> = conn
+                .query_first("SELECT @@local_infile")
+                .await
+                .map_err(|e| MigrateError::pool(e, "probing @@local_infile"))?;
+            if local_infile != Some(1) {
+                return Err(MigrateError::Config(format!(
+                    "mysql_load_data: always was requested but the MySQL server at {}:{} \
+                     has @@local_infile = {}. LOAD DATA LOCAL INFILE streams rows before \
+                     the server accepts them, so a disabled server would silently drop \
+                     each batch. Either run `SET GLOBAL local_infile = 1` on the server \
+                     or set `migration.mysql_load_data: never` in your config.",
+                    config.host,
+                    config.port,
+                    local_infile.map_or_else(|| "<unavailable>".to_string(), |v| v.to_string()),
+                )));
+            }
+        }
+
         drop(conn);
 
         info!(
@@ -828,17 +851,23 @@ impl TargetWriter for MysqlWriter {
 
         // Use LOAD DATA if configured
         if self.mysql_load_data == MysqlLoadData::Always {
-            // Try LOAD DATA first, fall back to INSERT if not supported
             match self
                 .write_batch_load_data(&mut conn, schema, table, cols, batch)
                 .await?
             {
                 Some(count) => return Ok(count),
                 None => {
-                    // LOAD DATA not supported, but we've consumed the batch
-                    // This should only happen once per connection - log and return
-                    warn!("LOAD DATA failed, batch was consumed. Consider using mysql_load_data: never");
-                    return Ok(0);
+                    // The writer pre-flights @@local_infile at pool creation, so we
+                    // should never get here. If a server toggles local_infile off
+                    // mid-run the batch was already streamed into the void — fail
+                    // loudly rather than returning Ok(0) and silently dropping rows.
+                    return Err(MigrateError::transfer(
+                        &Self::qualify_table(schema, table),
+                        "MySQL server rejected LOAD DATA LOCAL INFILE mid-run; the \
+                         batch was consumed by the stream and cannot be retried. \
+                         Re-run with `migration.mysql_load_data: never` to use \
+                         INSERT-based bulk loading.",
+                    ));
                 }
             }
         }
