@@ -121,6 +121,29 @@ impl MysqlWriter {
             .await
             .map_err(|e| MigrateError::pool(e, "testing MySQL target connection"))?;
 
+        // Pre-flight probe: LOAD DATA LOCAL INFILE streams rows into the server
+        // before the server decides whether to accept them. If `local_infile` is
+        // off, the batch is irrecoverably consumed — so we must refuse to start
+        // when the user opted into LOAD DATA but the server has it disabled.
+        if mysql_load_data == MysqlLoadData::Always {
+            let local_infile: Option<u8> = conn
+                .query_first("SELECT @@local_infile")
+                .await
+                .map_err(|e| MigrateError::pool(e, "probing @@local_infile"))?;
+            if local_infile != Some(1) {
+                return Err(MigrateError::Config(format!(
+                    "migration.mysql_load_data: always was requested but the MySQL server \
+                     at {}:{} has @@local_infile = {}. LOAD DATA LOCAL INFILE streams rows \
+                     before the server accepts them, so a disabled server would silently \
+                     drop each batch. Either run `SET GLOBAL local_infile = 1` on the \
+                     server or set `migration.mysql_load_data: never` in your config.",
+                    config.host,
+                    config.port,
+                    local_infile.map_or_else(|| "<unavailable>".to_string(), |v| v.to_string()),
+                )));
+            }
+        }
+
         drop(conn);
 
         info!(
@@ -282,7 +305,10 @@ impl MysqlWriter {
     }
 
     /// Write batch using LOAD DATA LOCAL INFILE for maximum performance.
-    /// Returns Ok(Some(count)) on success, Ok(None) if LOAD DATA is not supported.
+    ///
+    /// Returns the number of rows loaded. Any rejection by the MySQL server
+    /// is a hard error: by the time the server rejects, the batch has
+    /// already been streamed and cannot be retried via INSERT.
     async fn write_batch_load_data(
         &self,
         conn: &mut Conn,
@@ -290,10 +316,10 @@ impl MysqlWriter {
         table: &str,
         cols: &[String],
         batch: Batch,
-    ) -> Result<Option<u64>> {
+    ) -> Result<u64> {
         let rows = batch.rows;
         if rows.is_empty() {
-            return Ok(Some(0));
+            return Ok(0);
         }
 
         let row_count = rows.len() as u64;
@@ -341,28 +367,28 @@ impl MysqlWriter {
                     "MySQL: wrote {} rows to {} using LOAD DATA LOCAL INFILE",
                     row_count, qualified_table
                 );
-                Ok(Some(row_count))
+                Ok(row_count)
             }
             Err(e) => {
-                let err_str = e.to_string();
-                // Check for common LOAD DATA errors:
-                // - Error 1148: LOAD DATA LOCAL INFILE command is disabled
-                // - Error 3948: Loading local data is disabled
-                // - Error 2068: Local infile request rejected
-                if err_str.contains("1148")
-                    || err_str.contains("3948")
-                    || err_str.contains("2068")
-                    || err_str.contains("LOCAL INFILE")
-                    || err_str.contains("local data")
-                {
-                    warn!("MySQL: LOAD DATA LOCAL INFILE not supported, falling back to INSERT");
-                    Ok(None) // Indicate fallback needed
-                } else {
-                    Err(MigrateError::transfer(
-                        &qualified_table,
-                        format!("LOAD DATA: {}", e),
-                    ))
-                }
+                // LOAD DATA LOCAL INFILE streams the batch into the server before the
+                // server decides whether to accept it. By the time this error arrives
+                // the rows have already been consumed by the stream, so falling back
+                // to INSERT would drop the batch silently. Surface the original MySQL
+                // error so operators can see the exact rejection reason — common ones:
+                //   - 1148: LOAD DATA LOCAL INFILE command is disabled
+                //   - 3948: Loading local data is disabled
+                //   - 2068: Local infile request rejected (client-side)
+                //   - "LOCAL INFILE" / "local data" in the message for other variants
+                Err(MigrateError::transfer(
+                    &qualified_table,
+                    format!(
+                        "LOAD DATA LOCAL INFILE rejected by MySQL ({}). The batch was \
+                         already streamed and cannot be retried here. Re-run with \
+                         `migration.mysql_load_data: never` to use INSERT-based bulk \
+                         loading.",
+                        e
+                    ),
+                ))
             }
         }
     }
@@ -826,21 +852,15 @@ impl TargetWriter for MysqlWriter {
             .await
             .map_err(|e| MigrateError::pool(e, "getting MySQL connection"))?;
 
-        // Use LOAD DATA if configured
+        // Use LOAD DATA if configured. Any rejection is now a hard error inside
+        // write_batch_load_data — the pre-flight at pool creation catches the
+        // common `local_infile=0` case up front; anything surviving to here
+        // (server toggled local_infile mid-run, client-side rejection, etc.)
+        // carries the original MySQL error text in the transfer error.
         if self.mysql_load_data == MysqlLoadData::Always {
-            // Try LOAD DATA first, fall back to INSERT if not supported
-            match self
+            return self
                 .write_batch_load_data(&mut conn, schema, table, cols, batch)
-                .await?
-            {
-                Some(count) => return Ok(count),
-                None => {
-                    // LOAD DATA not supported, but we've consumed the batch
-                    // This should only happen once per connection - log and return
-                    warn!("LOAD DATA failed, batch was consumed. Consider using mysql_load_data: never");
-                    return Ok(0);
-                }
-            }
+                .await;
         }
 
         self.write_batch_insert(&mut conn, schema, table, cols, batch)
