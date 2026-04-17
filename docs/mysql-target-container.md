@@ -140,9 +140,60 @@ retained for single-worker configs and for users whose workload
 profile differs.
 
 Conclusion for MySQL target throughput on this host: we appear to be
-near the practical ceiling of the INSERT path. Further gains likely
-require either more buffer-pool RAM (to speed PK rebuild, which is
-~60 % of each run's time) or a protocol dmt-rs doesn't yet use.
+near the practical ceiling of the INSERT path. A protocol dmt-rs
+doesn't yet use would be required to go further, and a cheap one
+isn't obviously on offer — see the `exec_batch` note above.
+
+## Buffer pool sizing — why 2 GB is the sweet spot
+
+The intuition after the first bench was that PK rebuild (~60 % of
+each run's wall time) is RAM-bound, so bumping
+`innodb_buffer_pool_size` above 2 GB should help. We tested it. It
+doesn't.
+
+| pool | container cap | tuning-on median | tuning-off median | outcome |
+|------|---------------|-----------------:|------------------:|---------|
+| **2 GB** (default) | 6 GB | **120,668 rows/s** | **118,639 rows/s** | stable |
+| 3 GB               | 6 GB | 113,946 rows/s   | 113,407 rows/s   | stable, ~5 % regression |
+| 4 GB               | 6 GB | —                | —                | container OOM-killed after warm-up |
+
+Two things went wrong with the hypothesis:
+
+1. **PK rebuild doesn't use the buffer pool for its sort.** `ADD
+   PRIMARY KEY` merge-sorts via `innodb_sort_buffer_size` (default
+   1 MB per sort thread). Growing the pool doesn't speed that phase.
+
+2. **More pool means more dirty pages**, which means the
+   `log_checkpointer` has to do more work to keep the redo log from
+   running out of reusable space. At 3 GB we saw `[MY-014084]`
+   "Threads are unable to reserve space in redo log which can't be
+   reclaimed" warnings in `docker logs mysql-target`, even during
+   successful runs. The checkpointer overhead grows faster than the
+   cache-hit benefit for a write-heavy bulk-load workload.
+
+3. **4 GB pool + 512 MB redo + mysqld overhead + per-connection
+   buffers** pushed the container over its 6 GB cap. The OOM killer
+   took mysqld out mid-bench. Raising the container cap to 8 GB
+   would work but eats into the 12 GB Docker VM budget that
+   `mssql-bench` (source) also needs.
+
+Takeaway: on this dataset, at this container size, **don't grow the
+pool**. If a user has a larger VM and a larger container cap (say a
+16 GB VM with an 10 GB container), the headroom calculus might
+change — but within the 12 GB / 6 GB envelope documented here,
+2 GB is genuinely the sweet spot.
+
+Reproducer for the pool-size sweep:
+
+```bash
+# edit docker/mysql-target/my.cnf to the target pool size, then:
+docker rm -f mysql-target
+docker run -d --name mysql-target --memory=6g --memory-swap=6g \
+  -p 3307:3306 -e MYSQL_ROOT_PASSWORD=TestPass2024 \
+  -v "$PWD/docker/mysql-target/my.cnf:/etc/mysql/conf.d/tuned.cnf:ro" \
+  mysql:8.0
+LOG_DIR=.bench-logs-pool-XG ./scripts/bench-mysql-tuning.sh
+```
 
 ## Reproducing
 
