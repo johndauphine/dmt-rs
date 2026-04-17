@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.44.0] - 2026-04-17
+
+### Features
+- **Share state across `target_mode`** (#108) — `config_hash` now excludes `target_mode`, so a `drop_recreate` run seeds watermarks that a subsequent `upsert` run inherits. Post-drop upsert with no source changes completes in ~6s instead of paying the full first-upsert tax.
+- **Dialect-specific AI prompt augmentation** (#106) — AI type mapping prompts now include dialect-specific context (type quirks, reserved words) for better cross-DB type resolution.
+- Seeded `date_updated_columns` defaults in the 18 bundled test configs for out-of-the-box incremental sync.
+
+### Bug Fixes
+- **Cross-engine `datetime2` → `datetime`** (#109) — MSSQL targets now use `datetime` rather than `datetime2` when the source is a different engine, working around a bulk-insert driver issue with `datetime2`.
+- **MSSQL state init order** (#107) — state schema is now initialized before any writes; previously could race during cold-start.
+- **MySQL source TLS** — fixed TLS handshake failures when MySQL is the source.
+- **AI config on resume** (#105) — `dmt-rs resume` now loads the AI global config; previously only `run` did.
+- **Incremental sync watermark / resume** — multiple fixes to date-watermark handling during resume, including identity-mapper and datetime bulk-insert edge cases.
+
+### Tests / Chore
+- Standardized all 18 test configs (#109) — consistent formatting, shared `TestPass2024` password, hash-parity between drop/upsert variant pairs.
+
+### Documentation
+- M5 Pro cgroup-cap benchmark findings — Config E (41.1s `mssql→mssql` on 12 GiB VM with per-container 5 GiB cgroup cap) added to the cross-hardware table.
+- Incremental upsert-after-drop playbook section (§11).
+
 ## [1.43.0] - 2026-04-14
 
 ### Features

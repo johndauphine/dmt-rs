@@ -155,7 +155,7 @@ Build the binary:
 
 ```bash
 cargo build --release --all-features
-./target/release/dmt-rs --version   # should report: dmt-rs 1.42.2 (or later)
+./target/release/dmt-rs --version   # should report: dmt-rs 1.44.0 (or later)
 ```
 
 ---
