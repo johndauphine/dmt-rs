@@ -35,6 +35,7 @@ migration-logs-*.txt
 
 # Local benchmark artifacts
 .bench-logs/
+.bench-logs-*/
 
 # Screenshots
 Screenshot*.png
