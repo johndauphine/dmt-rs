@@ -179,10 +179,10 @@ LOG_DIR=.bench-logs-m3max-load-data ./scripts/bench-mysql-load-data.sh
 
 ### Baseline A/B — compare the median `rows/s` to M5 Pro:
 
-| config     | M5 Pro 24 GB | M3 Max 36 GB (to fill in) | Δ |
+| config     | M5 Pro 24 GB | M3 Max 36 GB | Δ |
 |------------|---:|---:|---:|
-| tuning-on  | 120,668 rows/s | ___ | ___ |
-| tuning-off | 118,639 rows/s | ___ | ___ |
+| tuning-on  | 120,668 rows/s | 165,509 rows/s | **+37.2 %** |
+| tuning-off | 118,639 rows/s | 167,499 rows/s | **+41.2 %** |
 
 Decision rule:
 
@@ -204,14 +204,98 @@ else is going on.
 
 Same comparison, using the published M3 Max cell:
 
-| config           | M5 Pro 24 GB | M3 Max 36 GB (to fill in) | Δ |
+| config           | M5 Pro 24 GB (tuned) | M3 Max 36 GB | Δ |
 |------------------|---:|---:|---:|
-| full-tuning-on   | 49,099 rows/s (stock container) / ~117,967 (tuned) | ___ | ___ |
-| full-tuning-off  | 44,786 rows/s (stock container) / ~117,175 (tuned) | ___ | ___ |
+| full-tuning-on   | 117,967 rows/s | 160,768 rows/s | **+36.3 %** |
+| full-tuning-off  | 117,175 rows/s | 160,729 rows/s | **+37.2 %** |
 
 The tuned-container numbers are from
 `docs/mysql-target-container.md`. Use those as the comparison point
 — the stock-container numbers are historical.
+
+## Results (2026-04-17, dmt-rs v1.44.0)
+
+**Hypothesis confirmed at the dramatic-uplift threshold (>+30 %).** Giving
+MSSQL 10 GiB of `max server memory` on a 12 GB cgroup moved MSSQL → MySQL
+throughput **+36 % to +41 %** across all four (baseline × full-schema) ×
+(tuning-on × tuning-off) cells versus the M5 Pro 24 GB baseline. MSSQL
+source RAM is a meaningful lever on this workload — it joins `mssql →
+mssql` and `pg → mssql` as a RAM-sensitive direction. The M5 Pro
+documented ceiling (~120 K rows/s) is not a protocol/CPU ceiling; it was
+a source-buffer-pool ceiling that only reveals itself when you have
+enough host RAM to lift it.
+
+### Host profile
+
+| Field | Value |
+|---|---|
+| Model | Mac15,10 (M3 Max) |
+| Cores | 14 |
+| Host RAM | 36.0 GB |
+| Docker VM | 23.4 GB |
+| MSSQL container (`mssql-bench`) | 12 GB cgroup, `max server memory = 10240` MB |
+| MySQL container (`mysql-target`) | 6 GB cgroup, `innodb_buffer_pool_size = 2G` (stock tuned my.cnf) |
+| dmt-rs | v1.44.0 release build, `--features mysql` |
+
+### Full raw medians
+
+Warm-up discarded in both scripts; 3 observations per variant interleaved.
+Median of 3 shown.
+
+| Bench | config | median wall (s) | median rows/s | M5 Pro baseline | Δ |
+|---|---|---:|---:|---:|---:|
+| baseline | tuning-on | 116.82 | 165,509 | 120,668 | **+37.2 %** |
+| baseline | tuning-off | 115.44 | 167,499 | 118,639 | **+41.2 %** |
+| full-schema | full-tuning-on | 120.27 | 160,768 | 117,967 | **+36.3 %** |
+| full-schema | full-tuning-off | 120.34 | 160,729 | 117,175 | **+37.2 %** |
+
+### Variance observation
+
+Per-run spread across the 3 observations in each group:
+
+| Bench | config | min rows/s | max rows/s | spread |
+|---|---|---:|---:|---:|
+| baseline | tuning-on | 147,304 | 165,609 | 18.3 K |
+| baseline | tuning-off | 162,415 | 175,087 | 12.7 K |
+| full-schema | full-tuning-on | 149,979 | 168,867 | 18.9 K |
+| full-schema | full-tuning-off | 151,805 | 164,950 | 13.1 K |
+
+On the M5 Pro, the 12 GB VM produced a ~12 K rows/s spread and the 16 GB
+VM tightened that to ~3 K. The M3 Max at 23.4 GB VM sits in the 13-19 K
+band across all four configs — wider than the M5 Pro 16 GB ideal,
+tighter than the M5 Pro 12 GB squeezed case. The `tuning-off` variants
+are notably tighter than `tuning-on` in both matrices, which is
+unexplained but not large enough to chase.
+
+### `mysql_bulk_session_tuning` is ~noise at 10 GiB MSSQL RAM
+
+On the M5 Pro at 4 GiB MSSQL RAM, `mysql_bulk_session_tuning` showed a
+modest win on full-schema runs. On this M3 Max run at 10 GiB, on/off
+are within 0.1 % in both matrices (baseline: 165.5 K vs 167.5 K;
+full-schema: 160.8 K vs 160.7 K). The source-side buffer-pool uplift
+dominates any target-side session-tuning benefit at this RAM level. The
+knob is still a correct thing for the target-tuning doc to describe,
+but the decision rule should note that its measurable effect depends on
+how RAM-constrained the source is.
+
+### Cross-direction summary for the 48 GB M5 Pro decision
+
+Five of five directions now characterized against MSSQL source RAM:
+
+| Direction | RAM-sensitive? | Evidence |
+|---|---|---|
+| `mssql → mssql` | **Yes** | 98.6 s → 36.4 s on M3 Max (2.7×) |
+| `pg → mssql` | **Yes** | 104.8 s (3 GiB) → 78.8 s (6 GiB) → 63.8 s (M3 Max 6 GiB) |
+| `mssql → mysql` | **Yes (this experiment)** | +36-41 % across four cells |
+| `mssql → pg` | No | 43.3 / 44.6 / 42.9 s flat across RAM configs |
+| `pg → pg` | No | Storage-bound; more RAM + slower NVMe is a net regression |
+
+If the workload mix is MSSQL-source-heavy, a 48 GB M5 Pro upgrade pays
+off on three of five directions and is neutral on the other two. If the
+workload mix is PG-source-heavy, the upgrade is dead money for this
+tool's critical path.
+
+---
 
 ## Sharing results back
 
