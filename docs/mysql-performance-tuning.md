@@ -23,6 +23,17 @@ Tables with large text columns (TEXT, LONGTEXT, nvarchar(max)) are significantly
 
 ## LOAD DATA LOCAL INFILE
 
+> **Note (2026-04):** the numbers in this section were collected on a
+> stock `mysql:8.0` container. The finding that LOAD DATA loses at
+> ≥2 workers has since been re-validated on the tuned container
+> (`docker/mysql-target/my.cnf`, 2 GB buffer pool, all the knobs from
+> `docs/mysql-target-container.md`). On the tuned container,
+> `mysql_load_data: always` was still ~12 % slower than batched
+> INSERT at 4 workers — distributions do not overlap. TSV-generation
+> CPU cost is the dominant factor regardless of I/O tier. See the
+> "LOAD DATA LOCAL INFILE, re-evaluated on the tuned container"
+> section in `docs/mysql-target-container.md` for the re-test data.
+
 ### Configuration
 
 ```yaml

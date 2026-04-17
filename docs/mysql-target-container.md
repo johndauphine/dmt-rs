@@ -91,11 +91,58 @@ this host:
 
 The structural reason is protocol: Postgres has `COPY ... FROM BINARY`
 and MSSQL has BCP — both are binary bulk protocols. MySQL has no
-public equivalent; dmt-rs currently uses multi-row **text** INSERT with
-`?` placeholders (capped at 65,535 placeholders per statement = ~3 K
-rows per batch for a 20-column table). Getting onto mysql_async's
-binary prepared-statement protocol is the next lever; tracked as a
-follow-up.
+public equivalent; dmt-rs currently uses multi-row INSERT with `?`
+placeholders (capped at 65,535 placeholders per statement = ~3 K rows
+per batch for a 20-column table). Note that mysql_async's `exec_drop`
+already sends values in the **binary** protocol — only the SQL
+template is text. We initially thought moving to
+`Queryable::exec_batch` (server-side prepared, one exec per row) would
+help, but that API does one round-trip per row, which on a 19 M-row
+dataset would dwarf any CPU savings. So that lever is not on the
+table via the current mysql_async surface.
+
+## LOAD DATA LOCAL INFILE, re-evaluated on the tuned container
+
+`docs/mysql-performance-tuning.md` had previously concluded that LOAD
+DATA loses to multi-row INSERT at ≥2 workers because client-side TSV
+generation is CPU-expensive. That finding was on stock `mysql:8.0`
+where the InnoDB I/O path was the bottleneck; we wanted to re-check
+on the tuned container where I/O is no longer the gate, in case the
+TSV CPU cost was previously masked.
+
+It wasn't. LOAD DATA is still slower on the tuned container:
+
+| config (session tuning on, 4 workers)  | n | median wall (s) | median rows/s |
+|----------------------------------------|---|----------------:|--------------:|
+| `mysql_load_data: never` (INSERT)      | 3 | 162.63          | 118,874       |
+| `mysql_load_data: always` (LOAD DATA)  | 3 | 184.06          | 105,020       |
+
+Raw runs:
+
+| run | config                 | wall (s) | rows/s  |
+|-----|------------------------|---------:|--------:|
+| 1   | load-data-off (INSERT) | 158.10   | 122,267 |
+| 1   | load-data-on           | 177.89   | 108,623 |
+| 2   | load-data-on           | 184.06   | 105,020 |
+| 2   | load-data-off          | 162.63   | 118,874 |
+| 3   | load-data-off          | 166.38   | 116,167 |
+| 3   | load-data-on           | 187.35   | 103,157 |
+
+Every INSERT run beat every LOAD DATA run — distributions don't
+overlap. LOAD DATA is ~12 % slower on the tuned container.
+
+The CPU cost of client-side TSV escape-handling (every `\t`, `\n`,
+`\\`, `\0`, NULL sentinel per value per row — see `escape_tsv_value`
+in `crates/dmt-rs/src/drivers/mysql/writer.rs:371`) still outweighs
+any server-side bulk-path win with 4 concurrent writers. We're
+leaving `mysql_load_data: never` as the default; the feature is
+retained for single-worker configs and for users whose workload
+profile differs.
+
+Conclusion for MySQL target throughput on this host: we appear to be
+near the practical ceiling of the INSERT path. Further gains likely
+require either more buffer-pool RAM (to speed PK rebuild, which is
+~60 % of each run's time) or a protocol dmt-rs doesn't yet use.
 
 ## Reproducing
 
@@ -115,4 +162,5 @@ docker run -d \
 cargo build --release --features mysql
 LOG_DIR=.bench-logs-tuned-baseline    ./scripts/bench-mysql-tuning.sh
 LOG_DIR=.bench-logs-tuned-full-schema ./scripts/bench-mysql-full-schema.sh
+LOG_DIR=.bench-logs-load-data         ./scripts/bench-mysql-load-data.sh
 ```
