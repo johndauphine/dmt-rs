@@ -2,11 +2,11 @@
 source:
   type: postgres
   host: localhost
-  port: 5433
+  port: 5432
   database: stackoverflow
   schema: public
   user: postgres
-  password: PostgresPassword123
+  password: "TestPass2024"
   ssl_mode: disable
 
 target:
@@ -16,7 +16,8 @@ target:
   database: stackoverflow_target
   schema: stackoverflow_target
   user: root
-  password: "rootpassword"
+  password: "TestPass2024"
+  ssl_mode: disable
 
 migration:
   target_mode: drop_recreate
