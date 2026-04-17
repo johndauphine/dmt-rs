@@ -183,6 +183,33 @@ pool**. If a user has a larger VM and a larger container cap (say a
 change — but within the 12 GB / 6 GB envelope documented here,
 2 GB is genuinely the sweet spot.
 
+## Docker VM sizing — 12 GB is fine, 16 GB buys cleaner benches only
+
+Tested whether bumping the Docker Desktop VM from 12 GB to 16 GB
+helps MSSQL → MySQL drop_recreate throughput. Same tuned my.cnf,
+same 6 GB container cap, same bench script (`bench-mysql-tuning.sh`,
+n=3 per variant, interleaved, warm-up discarded).
+
+| VM   | tuning-on median | tuning-off median | tuning-on range      |
+|------|-----------------:|------------------:|----------------------|
+| 12 GB | 120,668 rows/s  | 118,639 rows/s    | 114 K – 127 K (Δ 12 K) |
+| 16 GB | 124,941 rows/s  | 123,852 rows/s    | 124 K – 127 K (Δ 3 K)  |
+
+**Throughput shift: +3.5 % on, +4.4 % off.** Below the 10 % threshold
+we set as "meaningful" before the test. Consistent with the existing
+project memory that says 16 GiB adds nothing for the MSSQL-side
+bench — the conclusion carries over to MSSQL → MySQL.
+
+**Variance shift: ~4× tighter on 16 GB** (Δ 3 K vs Δ 12 K in the
+tuning-on spread). The 12 GB VM was close enough to memory pressure
+that individual runs drifted more. 16 GB gives enough headroom that
+run-to-run noise drops sharply.
+
+Takeaway: if you're just running migrations, **stay at 12 GB**. If
+you're running A/B benches and want tighter, more reproducible
+numbers, bumping to 16 GB is worth it even though the medians don't
+change much.
+
 Reproducer for the pool-size sweep:
 
 ```bash
