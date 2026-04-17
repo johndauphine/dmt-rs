@@ -134,3 +134,92 @@ cat .bench-logs/results.tsv
 The script hard-codes 3 runs per variant in its `ORDER` array. To change
 the run count or sequence, edit that array in `scripts/bench-mysql-tuning.sh`.
 Override the MySQL test password with `MYSQL_ROOT_PASSWORD=...`.
+
+---
+
+## Follow-up: full-schema run (indexes + FKs enabled)
+
+The baseline above runs against dmt-rs's defaults — no secondary indexes,
+no foreign keys, so neither tuning variable has anything to skip. To
+actually stress the tuning's hot paths we re-ran the same A/B with
+`create_indexes: true` and `create_foreign_keys: true`, which forces
+`ALTER TABLE ... ADD CONSTRAINT FOREIGN KEY` (child-table validation
+scan) and `ALTER TABLE ... ADD UNIQUE INDEX` (uniqueness enforcement)
+into the finalize phase where `foreign_key_checks=0` / `unique_checks=0`
+are designed to pay off.
+
+Configs: `benchmark-mssql-to-mysql-full-tuning-{on,off}.yaml`.
+Reproducer: `scripts/bench-mysql-full-schema.sh`. Methodology matches
+the baseline (discarded warm-up, interleaved order, n=3, medians).
+
+### Result — ambiguous, not confirming
+
+| config           | n | median wall (s) | median rows/s |
+|------------------|--:|---:|---:|
+| `full-tuning-on` | 3 | 393.48 | 49,099 |
+| `full-tuning-off`| 3 | 431.27 | 44,786 |
+
+Raw runs:
+
+| config          | run | wall (s) | dmt (s) | rows/s |
+|-----------------|-----|---------:|--------:|-------:|
+| full-tuning-on  | 1   | 393.48   | 393.30  | 49,099 |
+| full-tuning-off | 1   | 431.27   | 431.17  | 44,786 |
+| full-tuning-off | 2   | 457.63   | 457.50  | 42,209 |
+| full-tuning-on  | 2   | 435.52   | 435.33  | 44,358 |
+| full-tuning-on  | 3   | 385.31   | 385.20  | 50,131 |
+| full-tuning-off | 3   | 339.80   | 339.66  | 56,853 |
+
+Medians favor tuning-on by ~10%, but — unlike the baseline above, where
+every off-run was faster than every on-run — these distributions **do
+overlap**. The fastest tuning-off run (56,853 rows/s) beats every
+tuning-on run; the slowest tuning-off run (42,209) is slower than the
+slowest tuning-on (44,358). Put the six throughput values in a single
+sorted list and rank them by variant:
+
+```
+42209 (off) 44358 (on) 44786 (off) 49099 (on) 50131 (on) 56853 (off)
+```
+
+Rank sums are 10 (off) vs 11 (on) out of 21 total — essentially a coin
+flip. With n=3 per variant we cannot reject "no effect".
+
+### What we learned
+
+Combining this with the baseline:
+
+| config                                                  | outcome              | confidence |
+|---------------------------------------------------------|----------------------|------------|
+| defaults (`create_indexes: false`, FKs off)             | tuning **loses 14%** | distributions don't overlap |
+| full schema (`create_indexes: true`, `create_foreign_keys: true`) | tuning trends +10%   | distributions overlap; can't confirm |
+
+The 14% cost on defaults is real — that case is worth acting on. The
+full-schema gain is the right direction but not yet proven; we'd need
+a bigger n (maybe 10) or a schema with heavier FK/index density
+(StackOverflow2010 has very few secondary indexes in the source) to
+tighten the error bars.
+
+### Likely bigger lever: the MySQL container itself
+
+The target runs a stock `mysql:8.0` with a 128 MB InnoDB buffer pool
+against 19 M rows. That's almost certainly the dominant bottleneck —
+once the working set exceeds 128 MB, InnoDB thrashes, and any
+application-level tuning A/B becomes noise floating on top of I/O. A
+tuned container (2 GB buffer pool, 512 MB redo log, `doublewrite=OFF`,
+modern I/O capacity defaults) is probably a bigger speedup than
+anything we can do in application code, and would also give the
+session-tuning A/B a cleaner signal.
+
+That's tracked as the next follow-up; not in scope for this PR.
+
+### Recommendation re: the default
+
+Weak but leaning **flip the default to `false`**: the 14% cost on the
+common-case config is measured and real, while the gain on the
+full-schema config is not confirmed. A cleaner fix is to leave the
+default `false` and have the finalize phase set
+`foreign_key_checks = 0` inside the specific transactions that run
+`ADD CONSTRAINT FOREIGN KEY` / `ADD UNIQUE INDEX`, so the win is
+narrow-scoped to where it pays. That's a code change deferred to its
+own PR.
+
