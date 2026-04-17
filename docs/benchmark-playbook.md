@@ -752,10 +752,17 @@ same data, same workload).
 | **B** | M5 Pro | 11.67 GiB | 4 GiB | 18.0s | 44.6s | 107.8s | 64.4s | **234.8s** |
 | **C** | M5 Pro | 11.67 GiB | 6 GiB* | — | — | **78.8s** | — | partial run |
 | **D** | M3 Max | 23.43 GiB | 6 GiB | 25.6s | 42.9s | 63.8s | 36.4s | **168.7s** |
+| **E** | M5 Pro | 11.67 GiB | 4 GiB† | — | — | — | 41.1s | partial run |
 
 \* Config C isolated `pg → mssql` only to test the threshold theory (see
 below). Other directions not re-run because they're not the threshold
 case.
+
+† Config E (2026-04-16) isolated `mssql → mssql` with the **per-container
+5 GiB cgroup cap** applied (`docker update --memory=5g mssql-bench
+mssql-target`), which Config B did not have. Warm run; cold was 42.9s.
+See "Per-container cgroup cap unlocks the 40s tier on M5 Pro" under Key
+findings.
 
 Throughput (warm, end-to-end, rows/sec):
 
@@ -765,6 +772,7 @@ Throughput (warm, end-to-end, rows/sec):
 | **B** (M5 Pro / 4 GiB) | 1,074K | 433K | 179K | 300K |
 | **C** (M5 Pro / 6 GiB) | — | — | **245K** | — |
 | **D** (M3 Max / 6 GiB) | 755K | 450K | 302K | 530K |
+| **E** (M5 Pro / 4 GiB + cgroup) | — | — | — | **470K** |
 
 ### Key findings
 
@@ -790,6 +798,20 @@ side doesn't help.
 
 **4. `pg → pg` is fundamentally storage-bound.** A: 16.5s. B: 18.0s.
 D: 25.6s (slower NVMe hurts). No amount of RAM changes this.
+
+**5. Per-container cgroup cap unlocks the 40s tier on M5 Pro.** Config E
+(41.1s) vs Config B (64.4s) is the same host, same Docker VM size, same
+`max server memory`, same binary — the only difference is that E applied
+`docker update --memory=5g` to both MSSQL containers before the run. B
+left them uncapped. Without the cap, two MSSQLs claim up to the full VM's
+memory budget and contend for pages during concurrent read+write; with
+the cap, each is bounded to its own 5 GiB working set and they stop
+fighting. This is the mechanism §8.4 described in the uncapped-in-8-GiB
+failure case — the same pathology, dampened to a 36% regression instead
+of a 12-minute stall, still present at 12 GiB without the cap. **Always
+apply the per-container cap for multi-MSSQL benchmarks.** Config E lands
+within 15% of the M3 Max 36 GB baseline (D: 36.4s) using less than half
+the VM RAM.
 
 ### Remaining M5 Pro 6 GiB → M3 Max 6 GiB gap on `pg → mssql`
 
