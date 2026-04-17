@@ -210,6 +210,38 @@ you're running A/B benches and want tighter, more reproducible
 numbers, bumping to 16 GB is worth it even though the medians don't
 change much.
 
+## MSSQL source-side RAM — M3 Max 36 GB, 10 GiB `max server memory`
+
+Re-ran both A/Bs on an M3 Max 36 GB host with a 24 GB Docker VM,
+`mssql-bench` raised to a 12 GB cgroup / 10 240 MB `max server memory`,
+and the MySQL target unchanged (6 GB cgroup / 2 GB buffer pool). This
+isolates one variable: **how much of the StackOverflow2010 working set
+fits in the MSSQL source buffer pool.** Full procedure and per-run
+numbers in [`m3-max-mssql-ram-experiment.md`](m3-max-mssql-ram-experiment.md).
+
+| Bench | config | M5 Pro 24 GB (4 GiB MSSQL RAM) | M3 Max 36 GB (10 GiB MSSQL RAM) | Δ |
+|---|---|---:|---:|---:|
+| baseline | tuning-on | 120,668 rows/s | 165,509 rows/s | **+37 %** |
+| baseline | tuning-off | 118,639 rows/s | 167,499 rows/s | **+41 %** |
+| full-schema | full-tuning-on | 117,967 rows/s | 160,768 rows/s | **+36 %** |
+| full-schema | full-tuning-off | 117,175 rows/s | 160,729 rows/s | **+37 %** |
+
+The ~120 K rows/s M5 Pro ceiling is **not** a MySQL protocol or CPU
+ceiling — it's an MSSQL source buffer-pool ceiling that only reveals
+itself once you have enough host RAM to lift it. Every other lever
+we've tested on this doc (bigger MySQL buffer pool, LOAD DATA, 16 GB
+Docker VM, `mysql_bulk_session_tuning`) moves throughput by ≤5 % or
+regresses. Source-side RAM moves it by +36-41 %.
+
+Secondary observation: `mysql_bulk_session_tuning` is effectively noise
+at 10 GiB MSSQL RAM (0.1 % delta in both benches). The source-side
+uplift dominates any target-side session-tuning win.
+
+Practical recommendation: if the host has ≥ 32 GB RAM, skip the
+`mssql-bench` at 4 GiB cap and go straight to 10 GiB / 12 GB cgroup.
+The tuned MySQL container caps (6 GB cgroup / 2 GB pool) do not
+change — MySQL's sweet spot is independent of host RAM.
+
 Reproducer for the pool-size sweep:
 
 ```bash
