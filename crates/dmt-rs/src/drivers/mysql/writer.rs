@@ -32,10 +32,16 @@ pub struct MysqlWriter {
 
 impl MysqlWriter {
     /// Create a new MySQL writer from configuration.
+    ///
+    /// When `bulk_session_tuning` is true, each pooled connection runs
+    /// `SET SESSION unique_checks=0` and `SET SESSION foreign_key_checks=0`
+    /// at connect time to reduce per-row overhead during bulk ingest. Source
+    /// data is assumed to have satisfied these constraints already.
     pub async fn new(
         config: &TargetConfig,
         max_conns: usize,
         mysql_load_data: MysqlLoadData,
+        bulk_session_tuning: bool,
     ) -> Result<Self> {
         let ssl_opts = match config.ssl_mode.to_lowercase().as_str() {
             "disable" => {
@@ -67,14 +73,26 @@ impl MysqlWriter {
             }
         };
 
+        // Per-connection initialization statements. Run on each pooled connection
+        // when it's first created. Anything here MUST work on every targeted MySQL
+        // flavor/version — a failure bricks the entire pool.
+        let mut init_stmts: Vec<String> = vec!["SET NAMES utf8mb4".to_string()];
+        if bulk_session_tuning {
+            // Source-side integrity is the source of truth during bulk loads, so
+            // the target doesn't need to re-verify it per row. These two are
+            // session-settable on every MySQL/MariaDB version we support and
+            // don't require elevated privileges on managed services (RDS etc.).
+            init_stmts.push("SET SESSION unique_checks = 0".to_string());
+            init_stmts.push("SET SESSION foreign_key_checks = 0".to_string());
+        }
+
         let mut builder = OptsBuilder::default()
             .ip_or_hostname(&config.host)
             .tcp_port(config.port)
             .db_name(Some(&config.database))
             .user(Some(&config.user))
             .pass(Some(&config.password))
-            // Use utf8mb4 for full Unicode support
-            .init(vec!["SET NAMES utf8mb4"]);
+            .init(init_stmts);
 
         if let Some(ssl) = ssl_opts {
             builder = builder.ssl_opts(ssl);

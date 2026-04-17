@@ -104,6 +104,10 @@ pub fn validate(config: &Config) -> Result<()> {
         "migration.max_pg_connections",
     )?;
     validate_nonzero_option(
+        config.migration.max_mysql_connections,
+        "migration.max_mysql_connections",
+    )?;
+    validate_nonzero_option(
         config.migration.finalizer_concurrency,
         "migration.finalizer_concurrency",
     )?;
@@ -381,6 +385,28 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("max_pg_connections"));
+    }
+
+    #[test]
+    fn test_zero_max_mysql_connections_rejected() {
+        let mut config = valid_config();
+        config.migration.max_mysql_connections = Some(0);
+        let result = validate(&config);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("max_mysql_connections"));
+    }
+
+    #[test]
+    fn test_mysql_bulk_session_tuning_defaults_true() {
+        let config = valid_config();
+        assert!(
+            config.migration.mysql_bulk_session_tuning,
+            "mysql_bulk_session_tuning must default to true so new users get the \
+             bulk-load speedup without opting in"
+        );
     }
 
     #[test]

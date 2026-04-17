@@ -435,6 +435,10 @@ pub struct MigrationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_pg_connections: Option<usize>,
 
+    /// Maximum MySQL/MariaDB connections. Auto-tuned based on workers if not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mysql_connections: Option<usize>,
+
     /// Minimum rows per partition when splitting large tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_rows_per_partition: Option<i64>,
@@ -493,6 +497,15 @@ pub struct MigrationConfig {
     /// This reduces memory pressure for tables with large text columns.
     #[serde(default)]
     pub compress_text: bool,
+
+    /// Apply MySQL bulk-load session tuning on writer connections (default: true).
+    /// When enabled, writer connections run `SET SESSION unique_checks=0` and
+    /// `SET SESSION foreign_key_checks=0` at connect time. Integrity is still
+    /// enforced by the source data (FKs and UNIQUEs were valid there); disabling
+    /// these checks removes per-row overhead that is the dominant cost on
+    /// foreign-key-heavy schemas. Set to `false` to keep the MySQL defaults.
+    #[serde(default = "default_true")]
+    pub mysql_bulk_session_tuning: bool,
 }
 
 impl Default for MigrationConfig {
@@ -513,6 +526,7 @@ impl Default for MigrationConfig {
             create_check_constraints: false,
             max_mssql_connections: None,
             max_pg_connections: None,
+            max_mysql_connections: None,
             min_rows_per_partition: None,
             finalizer_concurrency: None,
             copy_buffer_rows: None,
@@ -524,6 +538,7 @@ impl Default for MigrationConfig {
             memory_budget_percent: default_memory_budget_percent(),
             mysql_load_data: MysqlLoadData::default(),
             compress_text: false,
+            mysql_bulk_session_tuning: true,
         }
     }
 }
@@ -757,6 +772,15 @@ impl MigrationConfig {
             self.max_pg_connections = Some(conns);
         }
 
+        // MySQL connections: bound by both reader and writer parallelism since
+        // MySQL can be either source or target. Use the larger of the two.
+        if self.max_mysql_connections.is_none() {
+            let readers = self.parallel_readers.unwrap_or(4);
+            let writers = self.write_ahead_writers.unwrap_or(4);
+            let conns = (workers * readers.max(writers) + 4).clamp(8, 64);
+            self.max_mysql_connections = Some(conns);
+        }
+
         // Upsert batch size: scale with RAM (more aggressive for better throughput)
         // Larger batches reduce round-trips but use more memory
         if self.upsert_batch_size.is_none() {
@@ -796,10 +820,11 @@ impl MigrationConfig {
             memory_budget_mb,
         );
         info!(
-            "  large_table_threshold={}, mssql_conns={}, pg_conns={}",
+            "  large_table_threshold={}, mssql_conns={}, pg_conns={}, mysql_conns={}",
             self.large_table_threshold.unwrap(),
             self.max_mssql_connections.unwrap(),
             self.max_pg_connections.unwrap(),
+            self.max_mysql_connections.unwrap(),
         );
 
         self
@@ -858,6 +883,10 @@ impl MigrationConfig {
 
     pub fn get_max_pg_connections(&self) -> usize {
         self.max_pg_connections.unwrap_or(40)
+    }
+
+    pub fn get_max_mysql_connections(&self) -> usize {
+        self.max_mysql_connections.unwrap_or(40)
     }
 
     pub fn get_copy_buffer_rows(&self) -> usize {
