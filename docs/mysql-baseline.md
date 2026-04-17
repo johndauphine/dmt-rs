@@ -131,6 +131,6 @@ cargo build --release --features mysql
 cat .bench-logs/results.tsv
 ```
 
-Override run count by exporting `RUNS=N` (note: the script's interleave
-pattern currently hard-codes 3 per variant — adjust the `ORDER` array if
-you want more).
+The script hard-codes 3 runs per variant in its `ORDER` array. To change
+the run count or sequence, edit that array in `scripts/bench-mysql-tuning.sh`.
+Override the MySQL test password with `MYSQL_ROOT_PASSWORD=...`.
