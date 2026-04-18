@@ -625,49 +625,6 @@ migration:
         );
     }
 
-    // ============== MySQL bulk session tuning config tests ==============
-
-    #[test]
-    fn test_mysql_bulk_session_tuning_defaults_true_from_yaml() {
-        // Covers the user-facing default: when the field is omitted from YAML,
-        // serde must still produce `true`. This guards against accidentally
-        // dropping `#[serde(default = "default_true")]` on the field.
-        let config = Config::from_yaml(VALID_YAML).unwrap();
-        assert!(config.migration.mysql_bulk_session_tuning);
-    }
-
-    #[test]
-    fn test_mysql_bulk_session_tuning_explicit_false() {
-        let yaml = r#"
-source:
-  type: mssql
-  host: localhost
-  port: 1433
-  database: source_db
-  user: sa
-  password: password
-  schema: dbo
-  encrypt: false
-  trust_server_cert: true
-
-target:
-  type: mysql
-  host: localhost
-  port: 3306
-  database: target_db
-  user: root
-  password: password
-  ssl_mode: disable
-
-migration:
-  workers: 4
-  chunk_size: 100000
-  mysql_bulk_session_tuning: false
-"#;
-        let config = Config::from_yaml(yaml).unwrap();
-        assert!(!config.migration.mysql_bulk_session_tuning);
-    }
-
     #[test]
     fn test_mysql_load_data_invalid_value() {
         let yaml = r#"

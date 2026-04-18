@@ -7,6 +7,12 @@ RAM.** The goal is a clean answer to "does giving MSSQL more of the
 StackOverflow2010 dataset in its buffer pool move MSSQL → MySQL
 throughput?"
 
+> **Historical note.** Tables below show paired `tuning-on` /
+> `tuning-off` rows for the former `mysql_bulk_session_tuning` config
+> knob. That knob was removed; both rows now represent independent
+> runs of the current binary. The MSSQL-RAM finding is orthogonal to
+> the flag and remains valid.
+
 ## Context
 
 Published numbers (M5 Pro 24 GB host, 12 GB Docker VM, tuned MySQL
@@ -153,23 +159,14 @@ cargo build --release --features mysql
 
 ## Running the bench
 
-Two A/Bs, each ~30-45 minutes (warm-up run + 6 interleaved runs).
-They measure different parts of the migration.
+Only the LOAD DATA harness survives — the two A/B harnesses this
+experiment originally drove (`bench-mysql-tuning.sh` and
+`bench-mysql-full-schema.sh`) were removed when `mysql_bulk_session_tuning`
+was deleted. The numbers reported below were produced by those scripts
+before their removal; see git history (`git log --diff-filter=D --follow -- scripts/bench-mysql-tuning.sh`)
+for the exact invocation if you need to recreate the harness.
 
-### Baseline (no indexes, no FKs — what most dmt-rs users actually run)
-
-```bash
-LOG_DIR=.bench-logs-m3max-baseline ./scripts/bench-mysql-tuning.sh
-```
-
-### Full schema (create_indexes + create_foreign_keys enabled)
-
-```bash
-LOG_DIR=.bench-logs-m3max-full-schema ./scripts/bench-mysql-full-schema.sh
-```
-
-(Optional) LOAD DATA re-test — only if you want to confirm the
-TSV-CPU finding holds on the M3 Max too:
+To re-run the surviving piece (LOAD DATA re-check, ~30-45 minutes):
 
 ```bash
 LOG_DIR=.bench-logs-m3max-load-data ./scripts/bench-mysql-load-data.sh

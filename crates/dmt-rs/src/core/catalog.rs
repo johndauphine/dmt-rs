@@ -338,8 +338,6 @@ impl DriverCatalog {
     /// * `max_conns` - Maximum connection pool size
     /// * `source_db_type` - The source database type (for type mapping)
     /// * `mysql_load_data` - MySQL bulk load strategy (only used for MySQL targets)
-    /// * `mysql_bulk_session_tuning` - Whether to apply bulk-load session tuning
-    ///   (`unique_checks=0`, `foreign_key_checks=0`) on MySQL writer connections
     ///
     /// # Returns
     ///
@@ -351,7 +349,6 @@ impl DriverCatalog {
         max_conns: usize,
         source_db_type: &str,
         #[cfg(feature = "mysql")] mysql_load_data: crate::config::MysqlLoadData,
-        #[cfg(feature = "mysql")] mysql_bulk_session_tuning: bool,
     ) -> Result<TargetWriterImpl> {
         let db_type = config.r#type.to_lowercase();
         let target_type = match db_type.as_str() {
@@ -392,13 +389,7 @@ impl DriverCatalog {
             }
             #[cfg(feature = "mysql")]
             "mysql" | "mariadb" => {
-                let mut writer = MysqlWriter::new(
-                    config,
-                    max_conns,
-                    mysql_load_data,
-                    mysql_bulk_session_tuning,
-                )
-                .await?;
+                let mut writer = MysqlWriter::new(config, max_conns, mysql_load_data).await?;
                 if let Some(mapper) = type_mapper {
                     writer = writer.with_type_mapper(mapper);
                 }

@@ -23,7 +23,5 @@ migration:
   target_mode: drop_recreate
   workers: 4
   chunk_size: 50000
-  # Session tuning on (dmt-rs default) — not what we're measuring.
-  mysql_bulk_session_tuning: true
   # The lever under test: INSERT path.
   mysql_load_data: never

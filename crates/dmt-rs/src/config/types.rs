@@ -497,15 +497,6 @@ pub struct MigrationConfig {
     /// This reduces memory pressure for tables with large text columns.
     #[serde(default)]
     pub compress_text: bool,
-
-    /// Apply MySQL bulk-load session tuning on writer connections (default: true).
-    /// When enabled, writer connections run `SET SESSION unique_checks=0` and
-    /// `SET SESSION foreign_key_checks=0` at connect time. Integrity is still
-    /// enforced by the source data (FKs and UNIQUEs were valid there); disabling
-    /// these checks removes per-row overhead that is the dominant cost on
-    /// foreign-key-heavy schemas. Set to `false` to keep the MySQL defaults.
-    #[serde(default = "default_true")]
-    pub mysql_bulk_session_tuning: bool,
 }
 
 impl Default for MigrationConfig {
@@ -538,7 +529,6 @@ impl Default for MigrationConfig {
             memory_budget_percent: default_memory_budget_percent(),
             mysql_load_data: MysqlLoadData::default(),
             compress_text: false,
-            mysql_bulk_session_tuning: true,
         }
     }
 }

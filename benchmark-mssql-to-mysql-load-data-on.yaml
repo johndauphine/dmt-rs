@@ -23,8 +23,6 @@ migration:
   target_mode: drop_recreate
   workers: 4
   chunk_size: 50000
-  # Session tuning on (dmt-rs default) — not what we're measuring.
-  mysql_bulk_session_tuning: true
   # The lever under test: LOAD DATA LOCAL INFILE path.
   # Requires `local_infile = 1` on the target. The tuned my.cnf sets this.
   mysql_load_data: always
