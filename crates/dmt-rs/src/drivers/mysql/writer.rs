@@ -223,10 +223,24 @@ impl MysqlWriter {
             })
             .collect();
 
+        // InnoDB is clustered on PK; defining it inline avoids a full table
+        // rewrite from ALTER TABLE ADD PRIMARY KEY at finalize time.
+        let pk_clause = if !table.primary_key.is_empty() {
+            let pk_cols: Vec<String> = table
+                .primary_key
+                .iter()
+                .map(|c| Self::quote_ident(c))
+                .collect();
+            format!(",\n    PRIMARY KEY ({})", pk_cols.join(", "))
+        } else {
+            String::new()
+        };
+
         format!(
-            "CREATE TABLE {} (\n    {}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "CREATE TABLE {} (\n    {}{}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
             Self::qualify_table(target_schema, &table.name),
-            col_defs.join(",\n    ")
+            col_defs.join(",\n    "),
+            pk_clause
         )
     }
 
@@ -549,6 +563,16 @@ impl TargetWriter for MysqlWriter {
 
     async fn create_primary_key(&self, table: &Table, target_schema: &str) -> Result<()> {
         if table.primary_key.is_empty() {
+            return Ok(());
+        }
+
+        // PK is emitted inline by create_table, so finalize is typically a no-op.
+        // Guard keeps the code safe if the table was created without one.
+        if self.has_primary_key(target_schema, &table.name).await? {
+            debug!(
+                "Primary key already exists on {}.{}",
+                target_schema, table.name
+            );
             return Ok(());
         }
 
