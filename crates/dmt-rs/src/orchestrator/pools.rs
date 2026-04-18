@@ -572,15 +572,13 @@ impl TargetPoolImpl {
                 use crate::dialect::{MssqlToMysqlMapper, PostgresToMysqlMapper};
                 let mysql_pool_size = config.migration.get_max_mysql_connections();
                 mysql_info!(
-                    "Creating MySQL target connection pool (size={}, bulk_session_tuning={})",
-                    mysql_pool_size,
-                    config.migration.mysql_bulk_session_tuning
+                    "Creating MySQL target connection pool (size={})",
+                    mysql_pool_size
                 );
                 let writer = MysqlWriter::new(
                     &config.target,
                     mysql_pool_size,
                     config.migration.mysql_load_data,
-                    config.migration.mysql_bulk_session_tuning,
                 )
                 .await?;
                 // Add type mapper based on source database type

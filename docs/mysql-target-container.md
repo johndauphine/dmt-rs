@@ -7,6 +7,16 @@ application-level perf knob becomes noise on top of I/O. This doc
 describes the `my.cnf` dmt-rs ships for the bench target, what each
 knob does, and how much faster the tuned container is in practice.
 
+> **Historical note.** Many of the tables in this doc originally had
+> paired `tuning-on` / `tuning-off` columns for the `mysql_bulk_session_tuning`
+> config knob. That knob was removed after four A/B experiments across
+> two sources (MSSQL, PG) and two container configs (stock, tuned) never
+> found a scenario where enabling it won. It was structurally inert
+> anyway: the writer adds FKs via post-load `ALTER TABLE`, so the
+> `foreign_key_checks=0` session variable had no inline FK work to skip.
+> Tables below have been collapsed to the single remaining column (the
+> current binary's behavior, equivalent to the former `tuning-off`).
+
 ## The config
 
 [`docker/mysql-target/my.cnf`](../docker/mysql-target/my.cnf). Mount
@@ -32,51 +42,18 @@ database.
 
 ## Measured impact
 
-Same bench harness as [`docs/mysql-baseline.md`](mysql-baseline.md) —
 MSSQL `StackOverflow2010` → MySQL target, 19.3 M rows, drop_recreate,
-n=3 per variant with warm-up + interleaved ordering.
+n=3 per variant with warm-up + interleaved ordering, M5 Pro 24 GB host.
 
-### Stock vs tuned container (both A/Bs)
+| container                    | config        | rows/s      |
+|------------------------------|---------------|------------:|
+| stock 3 GB / 128 MB pool     | defaults      | 52,864      |
+| stock 3 GB / 128 MB pool     | full schema   | 44,786      |
+| **tuned 6 GB / 2 GB pool**   | defaults      | **118,639** |
+| **tuned 6 GB / 2 GB pool**   | full schema   | **117,175** |
 
-| container | config              | tuning-on rows/s | tuning-off rows/s |
-|-----------|---------------------|-----------------:|------------------:|
-| stock 3 GB / 128 MB pool | defaults       | 45,227 | 52,864 |
-| stock 3 GB / 128 MB pool | full schema    | 49,099 | 44,786 |
-| **tuned 6 GB / 2 GB pool** | defaults     | **120,668** | **118,639** |
-| **tuned 6 GB / 2 GB pool** | full schema  | **117,967** | **117,175** |
-
-The container jump is ~**2.5×** across every variant we measured —
-far larger than any application-code change shipped or proposed so
-far. The 14% anti-gain from `mysql_bulk_session_tuning=true` on stock
-completely disappears on the tuned container (0.7 – 1.7 % delta,
-distributions overlap), which is consistent with the hypothesis that
-the stock-container "loss" was InnoDB's change-buffer bookkeeping
-becoming visible when the buffer pool was starved. Give InnoDB enough
-memory and the bookkeeping lands under the noise floor.
-
-### Per-variant detail (tuned)
-
-**Defaults (no indexes, no FKs):**
-
-| run | config     | wall (s) | rows/s  |
-|-----|------------|---------:|--------:|
-| 1   | tuning-on  | 152.22   | 126,999 |
-| 1   | tuning-off | 160.06   | 120,736 |
-| 2   | tuning-off | 162.95   | 118,639 |
-| 2   | tuning-on  | 160.15   | 120,668 |
-| 3   | tuning-on  | 168.92   | 114,443 |
-| 3   | tuning-off | 163.26   | 118,426 |
-
-**Full schema (indexes + FKs):**
-
-| run | config          | wall (s) | rows/s  |
-|-----|-----------------|---------:|--------:|
-| 1   | full-tuning-on  | 166.74   | 115,918 |
-| 1   | full-tuning-off | 162.35   | 119,048 |
-| 2   | full-tuning-off | 165.24   | 116,957 |
-| 2   | full-tuning-on  | 163.83   | 117,967 |
-| 3   | full-tuning-on  | 163.34   | 118,415 |
-| 3   | full-tuning-off | 164.93   | 117,175 |
+The container jump is ~**2.5×** — far larger than any application-code
+change shipped or proposed so far.
 
 ## Where the MySQL target still trails
 
@@ -151,11 +128,11 @@ each run's wall time) is RAM-bound, so bumping
 `innodb_buffer_pool_size` above 2 GB should help. We tested it. It
 doesn't.
 
-| pool | container cap | tuning-on median | tuning-off median | outcome |
-|------|---------------|-----------------:|------------------:|---------|
-| **2 GB** (default) | 6 GB | **120,668 rows/s** | **118,639 rows/s** | stable |
-| 3 GB               | 6 GB | 113,946 rows/s   | 113,407 rows/s   | stable, ~5 % regression |
-| 4 GB               | 6 GB | —                | —                | container OOM-killed after warm-up |
+| pool | container cap | median rows/s | outcome |
+|------|---------------|--------------:|---------|
+| **2 GB** (default) | 6 GB | **118,639** | stable |
+| 3 GB               | 6 GB | 113,407     | stable, ~5 % regression |
+| 4 GB               | 6 GB | —           | container OOM-killed after warm-up |
 
 Two things went wrong with the hypothesis:
 
@@ -187,23 +164,21 @@ change — but within the 12 GB / 6 GB envelope documented here,
 
 Tested whether bumping the Docker Desktop VM from 12 GB to 16 GB
 helps MSSQL → MySQL drop_recreate throughput. Same tuned my.cnf,
-same 6 GB container cap, same bench script (`bench-mysql-tuning.sh`,
-n=3 per variant, interleaved, warm-up discarded).
+same 6 GB container cap, n=3 per VM, interleaved, warm-up discarded.
 
-| VM   | tuning-on median | tuning-off median | tuning-on range      |
-|------|-----------------:|------------------:|----------------------|
-| 12 GB | 120,668 rows/s  | 118,639 rows/s    | 114 K – 127 K (Δ 12 K) |
-| 16 GB | 124,941 rows/s  | 123,852 rows/s    | 124 K – 127 K (Δ 3 K)  |
+| VM    | median rows/s | range                  |
+|-------|--------------:|------------------------|
+| 12 GB | 118,639       | 114 K – 127 K (Δ 12 K) |
+| 16 GB | 123,852       | 124 K – 127 K (Δ 3 K)  |
 
-**Throughput shift: +3.5 % on, +4.4 % off.** Below the 10 % threshold
-we set as "meaningful" before the test. Consistent with the existing
-project memory that says 16 GiB adds nothing for the MSSQL-side
-bench — the conclusion carries over to MSSQL → MySQL.
+**Throughput shift: +4.4 %.** Below the 10 % threshold we set as
+"meaningful" before the test. Consistent with the existing project
+memory that says 16 GiB adds nothing for the MSSQL-side bench — the
+conclusion carries over to MSSQL → MySQL.
 
-**Variance shift: ~4× tighter on 16 GB** (Δ 3 K vs Δ 12 K in the
-tuning-on spread). The 12 GB VM was close enough to memory pressure
-that individual runs drifted more. 16 GB gives enough headroom that
-run-to-run noise drops sharply.
+**Variance shift: ~4× tighter on 16 GB** (Δ 3 K vs Δ 12 K). The 12 GB
+VM was close enough to memory pressure that individual runs drifted
+more. 16 GB gives enough headroom that run-to-run noise drops sharply.
 
 Takeaway: if you're just running migrations, **stay at 12 GB**. If
 you're running A/B benches and want tighter, more reproducible
@@ -212,53 +187,34 @@ change much.
 
 ## MSSQL source-side RAM — M3 Max 36 GB, 10 GiB `max server memory`
 
-Re-ran both A/Bs on an M3 Max 36 GB host with a 24 GB Docker VM,
-`mssql-bench` raised to a 12 GB cgroup / 10 240 MB `max server memory`,
-and the MySQL target unchanged (6 GB cgroup / 2 GB buffer pool). This
-isolates one variable: **how much of the StackOverflow2010 working set
-fits in the MSSQL source buffer pool.** Full procedure and per-run
-numbers in [`m3-max-mssql-ram-experiment.md`](m3-max-mssql-ram-experiment.md).
+Re-ran on an M3 Max 36 GB host with a 24 GB Docker VM, `mssql-bench`
+raised to a 12 GB cgroup / 10 240 MB `max server memory`, and the
+MySQL target unchanged (6 GB cgroup / 2 GB buffer pool). This isolates
+one variable: **how much of the StackOverflow2010 working set fits in
+the MSSQL source buffer pool.** Full procedure and per-run numbers in
+[`m3-max-mssql-ram-experiment.md`](m3-max-mssql-ram-experiment.md).
 
-| Bench | config | M5 Pro 24 GB (4 GiB MSSQL RAM) | M3 Max 36 GB (10 GiB MSSQL RAM) | Δ |
-|---|---|---:|---:|---:|
-| baseline | tuning-on | 120,668 rows/s | 165,509 rows/s | **+37 %** |
-| baseline | tuning-off | 118,639 rows/s | 167,499 rows/s | **+41 %** |
-| full-schema | full-tuning-on | 117,967 rows/s | 160,768 rows/s | **+36 %** |
-| full-schema | full-tuning-off | 117,175 rows/s | 160,729 rows/s | **+37 %** |
+| Bench       | M5 Pro 24 GB (4 GiB MSSQL RAM) | M3 Max 36 GB (10 GiB MSSQL RAM) | Δ        |
+|-------------|--------------------------------:|---------------------------------:|---------:|
+| baseline    | 118,639 rows/s                  | 167,499 rows/s                   | **+41 %** |
+| full-schema | 117,175 rows/s                  | 160,729 rows/s                   | **+37 %** |
 
 The ~120 K rows/s M5 Pro ceiling is **not** a MySQL protocol or CPU
 ceiling — it's an MSSQL source buffer-pool ceiling that only reveals
 itself once you have enough host RAM to lift it. Every other lever
 we've tested on this doc (bigger MySQL buffer pool, LOAD DATA, 16 GB
-Docker VM, `mysql_bulk_session_tuning`) moves throughput by ≤5 % or
-regresses. Source-side RAM moves it by +36-41 %.
-
-Secondary observation: `mysql_bulk_session_tuning` is effectively noise
-at 10 GiB MSSQL RAM (0.1 % delta in both benches). The source-side
-uplift dominates any target-side session-tuning win.
+Docker VM) moves throughput by ≤5 % or regresses. Source-side RAM
+moves it by +37-41 %.
 
 Practical recommendation: if the host has ≥ 32 GB RAM, skip the
 `mssql-bench` at 4 GiB cap and go straight to 10 GiB / 12 GB cgroup.
 The tuned MySQL container caps (6 GB cgroup / 2 GB pool) do not
 change — MySQL's sweet spot is independent of host RAM.
 
-Reproducer for the pool-size sweep:
-
-```bash
-# edit docker/mysql-target/my.cnf to the target pool size, then:
-docker rm -f mysql-target
-docker run -d --name mysql-target --memory=6g --memory-swap=6g \
-  -p 3307:3306 -e MYSQL_ROOT_PASSWORD=TestPass2024 \
-  -v "$PWD/docker/mysql-target/my.cnf:/etc/mysql/conf.d/tuned.cnf:ro" \
-  mysql:8.0
-LOG_DIR=.bench-logs-pool-XG ./scripts/bench-mysql-tuning.sh
-```
-
 ## Reproducing
 
 ```bash
 # Recreate the target with the tuned config
-docker stop mssql-target                          # keep 2-container budget
 docker rm -f mysql-target
 docker run -d \
   --name mysql-target \
@@ -268,9 +224,9 @@ docker run -d \
   -v "$PWD/docker/mysql-target/my.cnf:/etc/mysql/conf.d/tuned.cnf:ro" \
   mysql:8.0
 
-# Build dmt-rs + run the A/Bs
+# Build dmt-rs and run one of the remaining benches (LOAD DATA A/B).
+# The session-tuning A/B scripts and YAMLs were removed along with the
+# flag; see git history before this commit if you need the original harness.
 cargo build --release --features mysql
-LOG_DIR=.bench-logs-tuned-baseline    ./scripts/bench-mysql-tuning.sh
-LOG_DIR=.bench-logs-tuned-full-schema ./scripts/bench-mysql-full-schema.sh
-LOG_DIR=.bench-logs-load-data         ./scripts/bench-mysql-load-data.sh
+LOG_DIR=.bench-logs-load-data ./scripts/bench-mysql-load-data.sh
 ```

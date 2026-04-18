@@ -7,6 +7,12 @@ RAM.** The goal is a clean answer to "does giving MSSQL more of the
 StackOverflow2010 dataset in its buffer pool move MSSQL → MySQL
 throughput?"
 
+> **Historical note.** Tables below show paired `tuning-on` /
+> `tuning-off` rows for the former `mysql_bulk_session_tuning` config
+> knob. That knob was removed; both rows now represent independent
+> runs of the current binary. The MSSQL-RAM finding is orthogonal to
+> the flag and remains valid.
+
 ## Context
 
 Published numbers (M5 Pro 24 GB host, 12 GB Docker VM, tuned MySQL
