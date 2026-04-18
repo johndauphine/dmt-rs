@@ -89,7 +89,7 @@ TSV CPU cost was previously masked.
 
 It wasn't. LOAD DATA is still slower on the tuned container:
 
-| config (session tuning on, 4 workers)  | n | median wall (s) | median rows/s |
+| config (4 workers)                     | n | median wall (s) | median rows/s |
 |----------------------------------------|---|----------------:|--------------:|
 | `mysql_load_data: never` (INSERT)      | 3 | 162.63          | 118,874       |
 | `mysql_load_data: always` (LOAD DATA)  | 3 | 184.06          | 105,020       |
