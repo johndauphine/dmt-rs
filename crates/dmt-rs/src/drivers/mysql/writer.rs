@@ -566,30 +566,21 @@ impl TargetWriter for MysqlWriter {
             return Ok(());
         }
 
-        let mut conn = self
-            .pool
-            .get_conn()
-            .await
-            .map_err(|e| MigrateError::pool(e, "getting MySQL connection"))?;
-
         // PK is emitted inline by create_table, so finalize is typically a no-op.
         // Guard keeps the code safe if the table was created without one.
-        let check_sql = r#"
-            SELECT 1 FROM information_schema.TABLE_CONSTRAINTS
-            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_TYPE = 'PRIMARY KEY'
-            LIMIT 1
-        "#;
-        let exists: Option<i64> = conn
-            .exec_first(check_sql, (target_schema, &table.name))
-            .await
-            .map_err(|e| MigrateError::pool(e, "checking primary key existence"))?;
-        if exists.is_some() {
+        if self.has_primary_key(target_schema, &table.name).await? {
             debug!(
                 "Primary key already exists on {}.{}",
                 target_schema, table.name
             );
             return Ok(());
         }
+
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .map_err(|e| MigrateError::pool(e, "getting MySQL connection"))?;
 
         let pk_cols: Vec<String> = table
             .primary_key
