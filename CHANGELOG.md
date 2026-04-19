@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.45.0] - 2026-04-19
+
+### Performance
+- **Inline PRIMARY KEY for Postgres targets** (#122) — PK emitted as `CONSTRAINT ... PRIMARY KEY` inside `CREATE TABLE` instead of a trailing `ALTER TABLE ADD CONSTRAINT` at finalize. On pg→mysql SO2010 (19.3M rows), PK finalize phase drops to ~0.1s total across 9 tables.
+- **Inline PRIMARY KEY for MySQL targets** (#121) — same treatment for MySQL/InnoDB, where heap is PK-clustered so inline PK avoids a clustered-index rebuild at finalize.
+
+### Refactor
+- **Remove `mysql_bulk_session_tuning` config knob** (#120) — always-on; the knob offered no useful tradeoff in benchmarks.
+
+### Documentation
+- M3 Max 36 GB / 10 GiB MSSQL RAM experiment playbook and confirmed results.
+- 16 GB Docker VM finding: ~0 throughput win, ~4× tighter variance than 9 GiB.
+- MySQL buffer-pool sizing experiment — 2 GB is the sweet spot.
+- LOAD DATA A/B re-validation on tuned container (still loses).
+
 ## [1.44.0] - 2026-04-17
 
 ### Features
