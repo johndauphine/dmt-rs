@@ -41,6 +41,11 @@ pub struct Orchestrator {
     /// AI provider configuration.
     #[cfg(feature = "ai")]
     ai_config: Option<crate::ai::AiConfig>,
+    /// AI error diagnoser (mirrors Go dmt's DiagnoseSchemaError). Instantiated
+    /// lazily on first use so we don't pay the HTTP-client cost unless a DDL
+    /// actually fails.
+    #[cfg(feature = "ai")]
+    error_diagnoser: tokio::sync::OnceCell<Option<std::sync::Arc<crate::ai::ErrorDiagnoser>>>,
 }
 
 /// Result of a migration run.
@@ -316,6 +321,8 @@ impl Orchestrator {
             ai_cache: None,
             #[cfg(feature = "ai")]
             ai_config: None,
+            #[cfg(feature = "ai")]
+            error_diagnoser: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -324,6 +331,8 @@ impl Orchestrator {
     /// This wraps all registered type mappers with an AI fallback layer.
     /// Unknown types will be resolved via the configured LLM provider
     /// during the warm-up phase (after schema extraction, before DDL generation).
+    /// Also enables AI error diagnosis — failed DDL statements will be
+    /// analyzed and suggestions emitted via the registered diagnosis handler.
     #[cfg(feature = "ai")]
     pub fn with_ai_config(mut self, ai_config: &crate::ai::AiConfig) -> Self {
         let cache = std::sync::Arc::new(crate::ai::TypeCache::load(&ai_config.cache_path()));
@@ -335,6 +344,66 @@ impl Orchestrator {
             ai_config.provider
         );
         self
+    }
+
+    /// Lazily construct (and memoize) the error diagnoser. Returns `None`
+    /// if AI is not configured or provider construction fails.
+    #[cfg(feature = "ai")]
+    async fn get_error_diagnoser(&self) -> Option<std::sync::Arc<crate::ai::ErrorDiagnoser>> {
+        self.error_diagnoser
+            .get_or_init(|| async {
+                let ai_config = self.ai_config.as_ref()?;
+                match crate::ai::create_provider(ai_config) {
+                    Ok(boxed) => {
+                        let provider: std::sync::Arc<dyn crate::ai::AiProviderClient> =
+                            std::sync::Arc::from(boxed);
+                        debug!("AI error diagnosis enabled");
+                        Some(std::sync::Arc::new(crate::ai::ErrorDiagnoser::new(provider)))
+                    }
+                    Err(e) => {
+                        debug!("AI error diagnoser unavailable: {}", e);
+                        None
+                    }
+                }
+            })
+            .await
+            .clone()
+    }
+
+    /// Fire-and-emit AI diagnosis for a DDL/schema error. No-op if AI is
+    /// not configured. Mirrors Go dmt's `DiagnoseSchemaError`.
+    #[cfg(feature = "ai")]
+    async fn diagnose_schema_error(
+        &self,
+        operation: &str,
+        table: &crate::core::schema::Table,
+        err: &crate::error::MigrateError,
+    ) {
+        let Some(diag) = self.get_error_diagnoser().await else {
+            return;
+        };
+        let ctx = crate::ai::ErrorContext {
+            error_message: format!("{}: {}", operation, err),
+            table_name: table.name.clone(),
+            table_schema: table.schema.clone(),
+            columns: table.columns.clone(),
+            source_db_type: self.source.db_type().to_string(),
+            target_db_type: self.target.db_type().to_string(),
+            target_mode: format!("{:?}", self.config.migration.target_mode),
+        };
+        match diag.diagnose(&ctx).await {
+            Ok(d) => crate::ai::emit_diagnosis(&d),
+            Err(e) => debug!("AI error diagnosis unavailable: {}", e),
+        }
+    }
+
+    #[cfg(not(feature = "ai"))]
+    async fn diagnose_schema_error(
+        &self,
+        _operation: &str,
+        _table: &crate::core::schema::Table,
+        _err: &crate::error::MigrateError,
+    ) {
     }
 
     /// Enable progress reporting to stderr as JSON lines.
@@ -819,14 +888,19 @@ impl Orchestrator {
                 for (i, table) in tables.iter().enumerate() {
                     let table_name = table.full_name();
                     info!("Preparing table {}/{}: {}", i + 1, tables.len(), table_name);
-                    prep_target.drop_table(target_schema, &table.name).await?;
+                    if let Err(e) = prep_target.drop_table(target_schema, &table.name).await {
+                        self.diagnose_schema_error("DROP TABLE", table, &e).await;
+                        return Err(e);
+                    }
 
-                    if self.config.migration.use_unlogged_tables {
-                        prep_target
-                            .create_table_unlogged(table, target_schema)
-                            .await?;
+                    let create_result = if self.config.migration.use_unlogged_tables {
+                        prep_target.create_table_unlogged(table, target_schema).await
                     } else {
-                        prep_target.create_table(table, target_schema).await?;
+                        prep_target.create_table(table, target_schema).await
+                    };
+                    if let Err(e) = create_result {
+                        self.diagnose_schema_error("CREATE TABLE", table, &e).await;
+                        return Err(e);
                     }
                 }
             }
@@ -842,14 +916,19 @@ impl Orchestrator {
                     }
 
                     if !prep_target.table_exists(target_schema, &table.name).await? {
-                        if self.config.migration.use_unlogged_tables {
-                            prep_target
-                                .create_table_unlogged(table, target_schema)
-                                .await?;
+                        let create_result = if self.config.migration.use_unlogged_tables {
+                            prep_target.create_table_unlogged(table, target_schema).await
                         } else {
-                            prep_target.create_table(table, target_schema).await?;
+                            prep_target.create_table(table, target_schema).await
+                        };
+                        if let Err(e) = create_result {
+                            self.diagnose_schema_error("CREATE TABLE", table, &e).await;
+                            return Err(e);
                         }
-                        prep_target.create_primary_key(table, target_schema).await?;
+                        if let Err(e) = prep_target.create_primary_key(table, target_schema).await {
+                            self.diagnose_schema_error("CREATE PRIMARY KEY", table, &e).await;
+                            return Err(e);
+                        }
                     } else {
                         // For existing tables, ensure primary key exists (required for upsert)
                         if !prep_target
@@ -860,7 +939,10 @@ impl Orchestrator {
                                 "Adding missing primary key to existing table {}",
                                 table_name
                             );
-                            prep_target.create_primary_key(table, target_schema).await?;
+                            if let Err(e) = prep_target.create_primary_key(table, target_schema).await {
+                                self.diagnose_schema_error("CREATE PRIMARY KEY", table, &e).await;
+                                return Err(e);
+                            }
                         }
 
                         // Drop non-PK indexes for faster upserts (only recreated if create_indexes is enabled)
