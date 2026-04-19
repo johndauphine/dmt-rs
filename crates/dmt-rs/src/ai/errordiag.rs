@@ -45,7 +45,10 @@ pub struct ErrorContext {
     pub target_mode: String,
 }
 
-/// AI error diagnoser. Caches results by SHA-256 of the error message.
+/// AI error diagnoser. Caches results by a 128-bit truncated SHA-256 of
+/// the error message (parity with Go dmt's `digest[:16]`). The truncation
+/// is intentional: 128 bits of collision resistance is ample for an
+/// in-process dedup cache where keys are short error strings.
 pub struct ErrorDiagnoser {
     provider: Arc<dyn AiProviderClient>,
     cache: RwLock<HashMap<String, ErrorDiagnosis>>,
@@ -117,9 +120,14 @@ pub fn set_diagnosis_handler(handler: Option<DiagnosisHandler>) {
 }
 
 /// Dispatch a diagnosis to the registered handler, or log it as fallback.
+///
+/// The handler is cloned out of the lock before invocation so that a
+/// handler which calls [`set_diagnosis_handler`] (or otherwise needs the
+/// write lock) cannot deadlock, and so the read lock isn't held for the
+/// duration of handler execution.
 pub fn emit_diagnosis(diag: &ErrorDiagnosis) {
-    let guard = handler_slot().read().unwrap();
-    if let Some(h) = guard.as_ref() {
+    let handler = handler_slot().read().unwrap().clone();
+    if let Some(h) = handler {
         h(diag);
     } else {
         warn!("\n{}", diag.format_boxed());
@@ -241,12 +249,20 @@ fn parse_response(raw: &str) -> Result<ErrorDiagnosis> {
     Ok(diag)
 }
 
+/// Char-boundary-safe truncation. Byte-slicing with `&s[..max]` can panic
+/// on non-ASCII input if `max` falls inside a multi-byte UTF-8 sequence,
+/// so we walk `char_indices` and stop at the last char that fits.
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max])
+        return s.to_string();
     }
+    let end = s
+        .char_indices()
+        .map(|(i, ch)| i + ch.len_utf8())
+        .take_while(|&end| end <= max)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &s[..end])
 }
 
 impl ErrorDiagnosis {
@@ -276,20 +292,13 @@ impl ErrorDiagnosis {
         let mut out = String::new();
 
         let write_padded = |out: &mut String, content: &str| {
-            let (inner_max, truncated);
-            if content.len() > width - 4 {
-                inner_max = width - 7;
-                truncated = format!("{}...", &content[..inner_max]);
+            let truncated = if content.len() > width - 4 {
+                truncate(content, width - 7)
             } else {
-                truncated = content.to_string();
-            }
-            let padding = width.saturating_sub(4 + truncated.len());
-            let _ = writeln!(
-                out,
-                "│ {}{} │",
-                truncated,
-                " ".repeat(padding)
-            );
+                content.to_string()
+            };
+            let padding = width.saturating_sub(4 + truncated.chars().count());
+            let _ = writeln!(out, "│ {}{} │", truncated, " ".repeat(padding));
         };
 
         let title = " AI Error Diagnosis ";
@@ -324,6 +333,32 @@ impl ErrorDiagnosis {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the global diagnosis handler so they
+    /// don't trip over each other under `cargo test`'s default parallelism.
+    static HANDLER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard that captures the current global handler on construction
+    /// and restores it on drop, so a test can install a handler without
+    /// leaking state into sibling tests.
+    struct HandlerGuard {
+        prev: Option<DiagnosisHandler>,
+    }
+
+    impl HandlerGuard {
+        fn new() -> Self {
+            Self {
+                prev: handler_slot().read().unwrap().clone(),
+            }
+        }
+    }
+
+    impl Drop for HandlerGuard {
+        fn drop(&mut self) {
+            *handler_slot().write().unwrap() = self.prev.take();
+        }
+    }
 
     #[test]
     fn parses_clean_json() {
@@ -407,6 +442,9 @@ mod tests {
     #[test]
     fn handler_callback_fires_when_registered() {
         use std::sync::atomic::{AtomicUsize, Ordering};
+        let _serial = HANDLER_TEST_LOCK.lock().unwrap();
+        let _guard = HandlerGuard::new();
+
         let counter = Arc::new(AtomicUsize::new(0));
         let c = counter.clone();
         set_diagnosis_handler(Some(Arc::new(move |_: &ErrorDiagnosis| {
@@ -421,7 +459,17 @@ mod tests {
         };
         emit_diagnosis(&d);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
 
-        set_diagnosis_handler(None);
+    #[test]
+    fn truncate_handles_multibyte_chars() {
+        // "caf\u{00e9}" — e-acute is 2 bytes UTF-8. Truncating at max=4 would
+        // panic on byte-slicing mid-sequence; char-safe version must stop at 3.
+        let s = "caf\u{00e9}";
+        assert_eq!(s.len(), 5);
+        let t = truncate(s, 4);
+        // Result is "caf..." — the e-acute doesn't fit in 4 bytes after "caf".
+        assert!(t.starts_with("caf"));
+        assert!(t.ends_with("..."));
     }
 }
