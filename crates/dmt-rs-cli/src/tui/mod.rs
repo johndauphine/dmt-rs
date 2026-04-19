@@ -86,8 +86,18 @@ fn install_panic_hook() {
 use crate::tui::app::WizardStartReason;
 
 /// Run the TUI application.
-pub async fn run<P: AsRef<Path>>(config_path: P) -> Result<(), MigrateError> {
+///
+/// `global_config_override` mirrors the CLI's `--global-config` flag. When
+/// the `ai` feature is enabled we load that config and wire its `ai:`
+/// section into the Orchestrator so type mapping and error diagnosis work
+/// in TUI mode the same way they do in `run`/`resume`.
+pub async fn run<P: AsRef<Path>>(
+    config_path: P,
+    global_config_override: Option<&Path>,
+) -> Result<(), MigrateError> {
     let config_path = config_path.as_ref();
+    // Silence unused-variable warning when the `ai` feature is disabled.
+    let _ = global_config_override;
 
     // Try to load config - handle missing file gracefully
     let (config, wizard_reason) = match Config::load(config_path) {
@@ -137,6 +147,28 @@ pub async fn run<P: AsRef<Path>>(config_path: P) -> Result<(), MigrateError> {
     // Test log to verify tracing is working
     tracing::info!("TUI logging initialized");
 
+    // Load AI settings from the global config so the TUI-created
+    // Orchestrator gets .with_ai_config() applied (enables both type
+    // mapping warm-up and error diagnosis).
+    #[cfg(feature = "ai")]
+    let ai_config: Option<dmt_rs::ai::AiConfig> = {
+        let path = global_config_override
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(dmt_rs::ai::GlobalConfig::default_path);
+        match dmt_rs::ai::GlobalConfig::load(&path) {
+            Ok(gc) => {
+                if gc.ai.is_some() {
+                    tracing::info!("Loaded global config from {:?} (AI enabled)", path);
+                }
+                gc.ai
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load global config {:?}: {}", path, e);
+                None
+            }
+        }
+    };
+
     // Create application state
     let mut app = App::new(
         config,
@@ -144,6 +176,8 @@ pub async fn run<P: AsRef<Path>>(config_path: P) -> Result<(), MigrateError> {
         event_tx.clone(),
         palette_open.clone(),
         shared_input_mode.clone(),
+        #[cfg(feature = "ai")]
+        ai_config,
     );
 
     // If config was missing or invalid, start the wizard immediately

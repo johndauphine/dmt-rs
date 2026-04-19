@@ -168,10 +168,17 @@ async fn run() -> Result<(), MigrateError> {
         return Ok(());
     }
 
-    // Handle TUI command separately (manages its own terminal)
+    // Handle TUI command separately (manages its own terminal). We pass
+    // `--global-config` through so TUI mode can load AI settings and wire
+    // them into its internally-constructed Orchestrator; otherwise AI
+    // type mapping and error diagnosis would be silently disabled in TUI.
     #[cfg(feature = "tui")]
     if let Commands::Tui = cli.command {
-        return tui::run(&cli.config).await;
+        #[cfg(feature = "ai")]
+        let global_override = cli.global_config.as_deref();
+        #[cfg(not(feature = "ai"))]
+        let global_override: Option<&std::path::Path> = None;
+        return tui::run(&cli.config, global_override).await;
     }
 
     // Setup logging
