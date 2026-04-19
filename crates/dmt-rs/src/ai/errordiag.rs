@@ -52,6 +52,12 @@ pub struct ErrorContext {
 pub struct ErrorDiagnoser {
     provider: Arc<dyn AiProviderClient>,
     cache: RwLock<HashMap<String, ErrorDiagnosis>>,
+    /// Per-key tokio mutex to serialize concurrent diagnoses of the same
+    /// error. Without this, N parallel spawned finalize/transfer tasks
+    /// hitting the same failure fire N concurrent provider calls before
+    /// the first one populates the cache — a real rate-limit / cost risk
+    /// exposed by the spawned-task wiring in #124.
+    inflight: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl ErrorDiagnoser {
@@ -59,6 +65,7 @@ impl ErrorDiagnoser {
         Self {
             provider,
             cache: RwLock::new(HashMap::new()),
+            inflight: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -66,8 +73,31 @@ impl ErrorDiagnoser {
     pub async fn diagnose(&self, ctx: &ErrorContext) -> Result<ErrorDiagnosis> {
         let key = hash_error(&ctx.error_message);
 
+        // Fast path — cache hit without touching the inflight map.
         if let Some(cached) = self.cache.read().unwrap().get(&key).cloned() {
             debug!("AI error diagnosis: cache hit for error hash {}", &key[..8]);
+            return Ok(cached);
+        }
+
+        // Get-or-insert a per-key mutex so parallel calls on the same
+        // error message serialize through one provider request.
+        let key_lock = {
+            let mut inflight = self.inflight.lock().await;
+            inflight
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+
+        let _guard = key_lock.lock().await;
+
+        // Re-check cache after acquiring the key lock — another task may
+        // have populated it while we were waiting.
+        if let Some(cached) = self.cache.read().unwrap().get(&key).cloned() {
+            debug!(
+                "AI error diagnosis: cache hit (post-inflight-wait) for hash {}",
+                &key[..8]
+            );
             return Ok(cached);
         }
 
@@ -456,6 +486,74 @@ mod tests {
         assert!(first.ends_with('┐'));
         assert!(last.starts_with('└'));
         assert!(last.ends_with('┘'));
+    }
+
+    /// Mock provider that counts `complete_text` calls and returns a
+    /// canned JSON diagnosis. Used to verify in-flight dedup.
+    struct CountingProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        delay_ms: u64,
+    }
+
+    #[async_trait::async_trait]
+    impl AiProviderClient for CountingProvider {
+        async fn map_type(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: i32,
+            _: i32,
+            _: i32,
+            _: &crate::ai::prompt::PromptContext,
+        ) -> crate::error::Result<String> {
+            unreachable!("not used in diagnosis tests")
+        }
+
+        async fn complete_text(
+            &self,
+            _system: &str,
+            _user: &str,
+            _max_tokens: u32,
+        ) -> crate::error::Result<String> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Small delay so parallel callers actually overlap.
+            if self.delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            }
+            Ok(r#"{"cause":"x","suggestions":["a"],"confidence":"high","category":"other"}"#
+                .to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn diagnose_inflight_dedup_collapses_duplicate_calls() {
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = Arc::new(CountingProvider {
+            calls: counter.clone(),
+            delay_ms: 25,
+        });
+        let diagnoser = Arc::new(ErrorDiagnoser::new(provider));
+
+        let ctx = ErrorContext {
+            error_message: "shared error".into(),
+            ..Default::default()
+        };
+
+        // Fire 8 concurrent diagnose calls with the same error message.
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let d = diagnoser.clone();
+            let c = ctx.clone();
+            handles.push(tokio::spawn(async move { d.diagnose(&c).await }));
+        }
+        for h in handles {
+            h.await.unwrap().unwrap();
+        }
+
+        // Without in-flight dedup this would be 8. With dedup it's 1.
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

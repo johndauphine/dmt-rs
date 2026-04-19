@@ -1215,6 +1215,21 @@ impl Orchestrator {
             workers
         );
 
+        // O(1) lookup used by the AI diagnosis path when a transfer fails.
+        // Built once so the error path doesn't re-scan pending_tables or
+        // re-allocate full_name() strings on every failure.
+        let tables_by_name: HashMap<String, &Table> = pending_tables
+            .iter()
+            .copied()
+            .map(|t| (t.full_name(), t))
+            .collect();
+
+        // Pre-fetch the diagnosis context so the JoinSet loop can fire
+        // diagnosis in a background spawn without awaiting the provider
+        // call inline (which would block result processing and cancellation
+        // propagation for potentially seconds).
+        let diagctx = self.spawn_diagnose_ctx().await;
+
         // Use JoinSet to process task completions as they occur (not sequentially).
         // This prevents fast tables from waiting on slow tables.
         let mut join_set: JoinSet<(String, crate::error::Result<crate::transfer::TransferStats>)> =
@@ -1494,13 +1509,26 @@ impl Orchestrator {
                     if let Some(token) = table_cancel_tokens.get(&base_table) {
                         token.cancel();
                     }
-                    // Fire AI diagnosis on first failure per table (cache
-                    // dedups repeat invocations for the same error message).
+                    // Fire AI diagnosis in the background on first failure
+                    // per table. The cache (plus in-flight dedup) handles
+                    // repeat invocations. Spawning keeps the JoinSet loop
+                    // responsive to cancellation and further completions
+                    // while the provider call is in flight.
                     if !table_errors.contains_key(&base_table) {
-                        if let Some(table) =
-                            pending_tables.iter().find(|t| t.full_name() == base_table)
-                        {
-                            self.diagnose_schema_error("TRANSFER", table, e).await;
+                        if let Some(table) = tables_by_name.get(&base_table).copied() {
+                            let dc = diagctx.clone();
+                            let t = table.clone();
+                            let err_str = e.to_string();
+                            tokio::spawn(async move {
+                                // Re-wrap the stringified error as a MigrateError
+                                // so the diagnoser's format_error_chain gets the
+                                // same surface it would have had from &e.
+                                let err = crate::error::MigrateError::Transfer {
+                                    table: t.full_name(),
+                                    message: err_str,
+                                };
+                                dc.fire("TRANSFER", &t, &err).await;
+                            });
                         }
                     }
                     // Preserve first error for this table (don't overwrite if partition already failed)
