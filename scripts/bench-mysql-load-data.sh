@@ -2,7 +2,7 @@
 # MySQL LOAD DATA LOCAL INFILE vs multi-row INSERT A/B benchmark.
 #
 # Ran against the TUNED mysql-target container (docker/mysql-target/my.cnf).
-# Purpose: re-evaluate docs/mysql-performance-tuning.md's finding that LOAD
+# Purpose: re-evaluate the earlier finding (see docs/benchmarks-archive.md §4) that LOAD
 # DATA loses at >=2 workers. That finding was on stock mysql:8.0 with a
 # 128 MB buffer pool, where I/O was the bottleneck and TSV-generation CPU
 # was secondary. On the tuned container I/O is no longer the gate, so this

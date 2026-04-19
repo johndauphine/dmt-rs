@@ -177,7 +177,10 @@ migration:
   # mysql_load_data: always  # Use LOAD DATA for large text tables (requires local_infile=ON)
 ```
 
-See [MySQL Performance Tuning](docs/mysql-performance-tuning.md) for optimization guidance.
+See [`docs/mysql-target-container.md`](docs/mysql-target-container.md)
+for MySQL target tuning, and
+[`docs/benchmarks.md`](docs/benchmarks.md) for current throughput
+numbers across all source/target combinations.
 
 ### Auto-Tuning
 

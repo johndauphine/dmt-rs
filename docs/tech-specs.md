@@ -393,7 +393,9 @@ These are deliberate non-features. See [`philosophy.md`](philosophy.md) for the 
 - [`philosophy.md`](philosophy.md) — *why* the tool exists, what it is and is not
 - [`design.md`](design.md) — architecture, patterns, where each module fits
 - [`DATA_ENGINEER_GUIDE.md`](DATA_ENGINEER_GUIDE.md) — operational guide for end users
-- [`mysql-performance-tuning.md`](mysql-performance-tuning.md) — MySQL-specific tuning
+- [`benchmarks.md`](benchmarks.md) — current throughput numbers and reproduction procedure
+- [`benchmarks-archive.md`](benchmarks-archive.md) — historical experiment writeups
+- [`mysql-target-container.md`](mysql-target-container.md) — MySQL target container tuning rationale
 - [`mssql-client-spike.md`](mssql-client-spike.md) — alternative MSSQL driver evaluation
 - `../PERFORMANCE.md` — benchmark results
 - `../config.example.yaml` — annotated config template

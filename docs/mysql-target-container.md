@@ -80,9 +80,9 @@ table via the current mysql_async surface.
 
 ## LOAD DATA LOCAL INFILE, re-evaluated on the tuned container
 
-`docs/mysql-performance-tuning.md` had previously concluded that LOAD
-DATA loses to multi-row INSERT at ≥2 workers because client-side TSV
-generation is CPU-expensive. That finding was on stock `mysql:8.0`
+Earlier benchmarks (preserved in [`benchmarks-archive.md`](benchmarks-archive.md)
+§4) concluded that LOAD DATA loses to multi-row INSERT at ≥2 workers
+because client-side TSV generation is CPU-expensive. That finding was on stock `mysql:8.0`
 where the InnoDB I/O path was the bottleneck; we wanted to re-check
 on the tuned container where I/O is no longer the gate, in case the
 TSV CPU cost was previously masked.
@@ -192,7 +192,7 @@ raised to a 12 GB cgroup / 10 240 MB `max server memory`, and the
 MySQL target unchanged (6 GB cgroup / 2 GB buffer pool). This isolates
 one variable: **how much of the StackOverflow2010 working set fits in
 the MSSQL source buffer pool.** Full procedure and per-run numbers in
-[`m3-max-mssql-ram-experiment.md`](m3-max-mssql-ram-experiment.md).
+[`benchmarks-archive.md`](benchmarks-archive.md) §2.
 
 | Bench       | M5 Pro 24 GB (4 GiB MSSQL RAM) | M3 Max 36 GB (10 GiB MSSQL RAM) | Δ        |
 |-------------|--------------------------------:|---------------------------------:|---------:|

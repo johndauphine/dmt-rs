@@ -9,8 +9,8 @@
 -- The schema has a single denormalized table `_dmt_rs.table_state` that
 -- stores all run-level metadata alongside each per-table row. There is
 -- NO separate `migration_runs` table, even though an earlier version of
--- this file (and `docs/tech-specs.md`) described one. See §7 of
--- `docs/benchmark-playbook.md` for the canonical validation query.
+-- this file (and `docs/tech-specs.md`) described one. See
+-- `docs/benchmarks.md` §5.4 for the canonical validation query.
 
 -- Per-table state (denormalized with run-level fields)
 CREATE TABLE IF NOT EXISTS _dmt_rs.table_state (

@@ -73,7 +73,7 @@ All notable changes to this project will be documented in this file.
   - Batched INSERT: 33,387 rows/sec (optimal for parallel workloads)
   - LOAD DATA: 34,231 rows/sec with 1 worker (2% faster for single-threaded)
   - Added `mysql_load_data` config option (never/always)
-  - See [MySQL Performance Tuning Guide](docs/mysql-performance-tuning.md)
+  - See [`docs/benchmarks-archive.md`](docs/benchmarks-archive.md) §4 for the tuning history
 
 ### Bug Fixes
 - **drop_recreate State Handling** - Fixed bug where drop_recreate mode would skip tables marked as completed in state from previous runs. Now always processes all tables in drop_recreate mode.
