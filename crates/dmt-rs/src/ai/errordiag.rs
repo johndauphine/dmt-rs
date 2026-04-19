@@ -52,6 +52,12 @@ pub struct ErrorContext {
 pub struct ErrorDiagnoser {
     provider: Arc<dyn AiProviderClient>,
     cache: RwLock<HashMap<String, ErrorDiagnosis>>,
+    /// Per-key tokio mutex to serialize concurrent diagnoses of the same
+    /// error. Without this, N parallel spawned finalize/transfer tasks
+    /// hitting the same failure fire N concurrent provider calls before
+    /// the first one populates the cache — a real rate-limit / cost risk
+    /// exposed by the spawned-task wiring in #124.
+    inflight: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl ErrorDiagnoser {
@@ -59,6 +65,7 @@ impl ErrorDiagnoser {
         Self {
             provider,
             cache: RwLock::new(HashMap::new()),
+            inflight: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -66,8 +73,31 @@ impl ErrorDiagnoser {
     pub async fn diagnose(&self, ctx: &ErrorContext) -> Result<ErrorDiagnosis> {
         let key = hash_error(&ctx.error_message);
 
+        // Fast path — cache hit without touching the inflight map.
         if let Some(cached) = self.cache.read().unwrap().get(&key).cloned() {
             debug!("AI error diagnosis: cache hit for error hash {}", &key[..8]);
+            return Ok(cached);
+        }
+
+        // Get-or-insert a per-key mutex so parallel calls on the same
+        // error message serialize through one provider request.
+        let key_lock = {
+            let mut inflight = self.inflight.lock().await;
+            inflight
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+
+        let _guard = key_lock.lock().await;
+
+        // Re-check cache after acquiring the key lock — another task may
+        // have populated it while we were waiting.
+        if let Some(cached) = self.cache.read().unwrap().get(&key).cloned() {
+            debug!(
+                "AI error diagnosis: cache hit (post-inflight-wait) for hash {}",
+                &key[..8]
+            );
             return Ok(cached);
         }
 
@@ -132,6 +162,35 @@ pub fn emit_diagnosis(diag: &ErrorDiagnosis) {
     } else {
         warn!("\n{}", diag.format_boxed());
     }
+}
+
+/// Convenience wrapper for diagnose-then-emit from a `tokio::spawn`'d
+/// task. The caller is responsible for pre-fetching the diagnoser and
+/// constructing the context before the spawn (so the method doesn't need
+/// `&Orchestrator` access inside the task).
+pub async fn diagnose_and_emit(diagnoser: Arc<ErrorDiagnoser>, ctx: ErrorContext) {
+    match diagnoser.diagnose(&ctx).await {
+        Ok(d) => emit_diagnosis(&d),
+        Err(e) => debug!("AI error diagnosis unavailable: {}", e),
+    }
+}
+
+/// Format an error and its full `source()` chain into a single string.
+/// The top-level `Display` impl on `MigrateError` often hides the real
+/// detail (e.g., `"db error"` vs the underlying `"permission denied for
+/// schema public"`), so we walk the chain to give the LLM everything.
+pub fn format_error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts: Vec<String> = vec![err.to_string()];
+    let mut cursor: Option<&(dyn std::error::Error + 'static)> = err.source();
+    while let Some(e) = cursor {
+        let s = e.to_string();
+        // Skip duplicates — some error types repeat the outer message.
+        if parts.last().map(|p| p != &s).unwrap_or(true) {
+            parts.push(s);
+        }
+        cursor = e.source();
+    }
+    parts.join(": ")
 }
 
 fn hash_error(msg: &str) -> String {
@@ -429,6 +488,74 @@ mod tests {
         assert!(last.ends_with('┘'));
     }
 
+    /// Mock provider that counts `complete_text` calls and returns a
+    /// canned JSON diagnosis. Used to verify in-flight dedup.
+    struct CountingProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        delay_ms: u64,
+    }
+
+    #[async_trait::async_trait]
+    impl AiProviderClient for CountingProvider {
+        async fn map_type(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: i32,
+            _: i32,
+            _: i32,
+            _: &crate::ai::prompt::PromptContext,
+        ) -> crate::error::Result<String> {
+            unreachable!("not used in diagnosis tests")
+        }
+
+        async fn complete_text(
+            &self,
+            _system: &str,
+            _user: &str,
+            _max_tokens: u32,
+        ) -> crate::error::Result<String> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Small delay so parallel callers actually overlap.
+            if self.delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            }
+            Ok(r#"{"cause":"x","suggestions":["a"],"confidence":"high","category":"other"}"#
+                .to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn diagnose_inflight_dedup_collapses_duplicate_calls() {
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = Arc::new(CountingProvider {
+            calls: counter.clone(),
+            delay_ms: 25,
+        });
+        let diagnoser = Arc::new(ErrorDiagnoser::new(provider));
+
+        let ctx = ErrorContext {
+            error_message: "shared error".into(),
+            ..Default::default()
+        };
+
+        // Fire 8 concurrent diagnose calls with the same error message.
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let d = diagnoser.clone();
+            let c = ctx.clone();
+            handles.push(tokio::spawn(async move { d.diagnose(&c).await }));
+        }
+        for h in handles {
+            h.await.unwrap().unwrap();
+        }
+
+        // Without in-flight dedup this would be 8. With dedup it's 1.
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn hash_is_stable_and_16_bytes_hex() {
         let h1 = hash_error("some error");
@@ -459,6 +586,72 @@ mod tests {
         };
         emit_diagnosis(&d);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn format_error_chain_walks_sources() {
+        use std::error::Error;
+        use std::fmt;
+
+        #[derive(Debug)]
+        struct Outer(Box<dyn Error + Send + Sync>);
+        #[derive(Debug)]
+        struct Middle(Box<dyn Error + Send + Sync>);
+        #[derive(Debug)]
+        struct Inner(&'static str);
+        impl fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "outer")
+            }
+        }
+        impl fmt::Display for Middle {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "middle")
+            }
+        }
+        impl fmt::Display for Inner {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl Error for Outer {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(self.0.as_ref())
+            }
+        }
+        impl Error for Middle {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(self.0.as_ref())
+            }
+        }
+        impl Error for Inner {}
+
+        let err = Outer(Box::new(Middle(Box::new(Inner("permission denied")))));
+        let s = format_error_chain(&err);
+        assert_eq!(s, "outer: middle: permission denied");
+    }
+
+    #[test]
+    fn format_error_chain_skips_duplicate_messages() {
+        use std::error::Error;
+        use std::fmt;
+
+        #[derive(Debug)]
+        struct Dup(&'static str, Option<Box<dyn Error + Send + Sync>>);
+        impl fmt::Display for Dup {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl Error for Dup {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                self.1.as_deref().map(|e| e as &(dyn Error + 'static))
+            }
+        }
+
+        let err = Dup("db error", Some(Box::new(Dup("db error", None))));
+        let s = format_error_chain(&err);
+        assert_eq!(s, "db error");
     }
 
     #[test]
