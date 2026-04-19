@@ -602,6 +602,15 @@ impl App {
                 self.cancel_token = None;
             }
 
+            #[cfg(feature = "ai")]
+            AppEvent::DiagnosisReceived(diag) => {
+                // Render the boxed diagnosis as an error-styled transcript
+                // entry. The library would otherwise emit it via `tracing::warn!`,
+                // which in TUI mode would only appear in the log panel —
+                // the transcript is more prominent and less likely to be missed.
+                self.add_error(diag.format_boxed());
+            }
+
             AppEvent::Success(msg) => {
                 self.add_transcript(TranscriptEntry::success(msg));
             }

@@ -151,6 +151,20 @@ pub async fn run<P: AsRef<Path>>(config_path: P) -> Result<(), MigrateError> {
         app.start_wizard(config_path.to_path_buf(), reason);
     }
 
+    // Register the AI diagnosis handler so failures render in the
+    // transcript instead of leaking through `tracing::warn!`. `try_send`
+    // means a full channel drops the diagnosis rather than blocking the
+    // lib thread that emitted it.
+    #[cfg(feature = "ai")]
+    {
+        let diag_event_tx = event_tx.clone();
+        dmt_rs::ai::set_diagnosis_handler(Some(Arc::new(
+            move |diag: &dmt_rs::ai::ErrorDiagnosis| {
+                let _ = diag_event_tx.try_send(AppEvent::DiagnosisReceived(diag.clone()));
+            },
+        )));
+    }
+
     // Spawn log forwarder
     let log_event_tx = event_tx.clone();
     tokio::spawn(async move {
@@ -191,6 +205,12 @@ pub async fn run<P: AsRef<Path>>(config_path: P) -> Result<(), MigrateError> {
             }
         }
     }
+
+    // Unregister the diagnosis handler so a later non-TUI run (unlikely
+    // but possible in tests or repeated invocations) doesn't dispatch
+    // into a dead channel.
+    #[cfg(feature = "ai")]
+    dmt_rs::ai::set_diagnosis_handler(None);
 
     // Restore terminal
     restore_terminal(&mut terminal)?;
