@@ -134,6 +134,35 @@ pub fn emit_diagnosis(diag: &ErrorDiagnosis) {
     }
 }
 
+/// Convenience wrapper for diagnose-then-emit from a `tokio::spawn`'d
+/// task. The caller is responsible for pre-fetching the diagnoser and
+/// constructing the context before the spawn (so the method doesn't need
+/// `&Orchestrator` access inside the task).
+pub async fn diagnose_and_emit(diagnoser: Arc<ErrorDiagnoser>, ctx: ErrorContext) {
+    match diagnoser.diagnose(&ctx).await {
+        Ok(d) => emit_diagnosis(&d),
+        Err(e) => debug!("AI error diagnosis unavailable: {}", e),
+    }
+}
+
+/// Format an error and its full `source()` chain into a single string.
+/// The top-level `Display` impl on `MigrateError` often hides the real
+/// detail (e.g., `"db error"` vs the underlying `"permission denied for
+/// schema public"`), so we walk the chain to give the LLM everything.
+pub fn format_error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts: Vec<String> = vec![err.to_string()];
+    let mut cursor: Option<&(dyn std::error::Error + 'static)> = err.source();
+    while let Some(e) = cursor {
+        let s = e.to_string();
+        // Skip duplicates — some error types repeat the outer message.
+        if parts.last().map(|p| p != &s).unwrap_or(true) {
+            parts.push(s);
+        }
+        cursor = e.source();
+    }
+    parts.join(": ")
+}
+
 fn hash_error(msg: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(msg.as_bytes());
@@ -459,6 +488,72 @@ mod tests {
         };
         emit_diagnosis(&d);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn format_error_chain_walks_sources() {
+        use std::error::Error;
+        use std::fmt;
+
+        #[derive(Debug)]
+        struct Outer(Box<dyn Error + Send + Sync>);
+        #[derive(Debug)]
+        struct Middle(Box<dyn Error + Send + Sync>);
+        #[derive(Debug)]
+        struct Inner(&'static str);
+        impl fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "outer")
+            }
+        }
+        impl fmt::Display for Middle {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "middle")
+            }
+        }
+        impl fmt::Display for Inner {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl Error for Outer {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(self.0.as_ref())
+            }
+        }
+        impl Error for Middle {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(self.0.as_ref())
+            }
+        }
+        impl Error for Inner {}
+
+        let err = Outer(Box::new(Middle(Box::new(Inner("permission denied")))));
+        let s = format_error_chain(&err);
+        assert_eq!(s, "outer: middle: permission denied");
+    }
+
+    #[test]
+    fn format_error_chain_skips_duplicate_messages() {
+        use std::error::Error;
+        use std::fmt;
+
+        #[derive(Debug)]
+        struct Dup(&'static str, Option<Box<dyn Error + Send + Sync>>);
+        impl fmt::Display for Dup {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl Error for Dup {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                self.1.as_deref().map(|e| e as &(dyn Error + 'static))
+            }
+        }
+
+        let err = Dup("db error", Some(Box::new(Dup("db error", None))));
+        let s = format_error_chain(&err);
+        assert_eq!(s, "db error");
     }
 
     #[test]

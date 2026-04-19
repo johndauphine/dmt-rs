@@ -16,8 +16,8 @@ mod provider;
 pub use cache::TypeCache;
 pub use config::{AiConfig, AiProvider, GlobalConfig};
 pub use errordiag::{
-    emit_diagnosis, set_diagnosis_handler, DiagnosisHandler, ErrorContext, ErrorDiagnoser,
-    ErrorDiagnosis,
+    diagnose_and_emit, emit_diagnosis, format_error_chain, set_diagnosis_handler,
+    DiagnosisHandler, ErrorContext, ErrorDiagnoser, ErrorDiagnosis,
 };
 pub use mapper::AiTypeMapper;
 pub use prompt::PromptContext;

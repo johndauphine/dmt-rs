@@ -289,6 +289,62 @@ impl ProgressTracker {
     }
 }
 
+/// Clonable bundle of state needed to fire AI error diagnosis from inside
+/// a `tokio::spawn`'d task (finalize-phase DDL, transfer writer errors).
+/// The AI-disabled variant is a zero-sized no-op so the call sites can
+/// share code without `cfg`-noise.
+#[cfg(feature = "ai")]
+#[derive(Clone)]
+struct SpawnDiagnoseCtx {
+    diagnoser: Option<std::sync::Arc<crate::ai::ErrorDiagnoser>>,
+    src_db: String,
+    tgt_db: String,
+    tgt_mode: String,
+}
+
+#[cfg(feature = "ai")]
+impl SpawnDiagnoseCtx {
+    async fn fire(
+        &self,
+        operation: &str,
+        table: &crate::core::schema::Table,
+        err: &crate::error::MigrateError,
+    ) {
+        let Some(d) = self.diagnoser.clone() else {
+            return;
+        };
+        let ctx = crate::ai::ErrorContext {
+            error_message: format!(
+                "{}: {}",
+                operation,
+                crate::ai::format_error_chain(err)
+            ),
+            table_name: table.name.clone(),
+            table_schema: table.schema.clone(),
+            columns: table.columns.clone(),
+            source_db_type: self.src_db.clone(),
+            target_db_type: self.tgt_db.clone(),
+            target_mode: self.tgt_mode.clone(),
+        };
+        crate::ai::diagnose_and_emit(d, ctx).await;
+    }
+}
+
+#[cfg(not(feature = "ai"))]
+#[derive(Clone, Default)]
+struct SpawnDiagnoseCtx;
+
+#[cfg(not(feature = "ai"))]
+impl SpawnDiagnoseCtx {
+    async fn fire(
+        &self,
+        _operation: &str,
+        _table: &crate::core::schema::Table,
+        _err: &crate::error::MigrateError,
+    ) {
+    }
+}
+
 impl Orchestrator {
     /// Create a new orchestrator.
     pub async fn new(config: Config) -> Result<Self> {
@@ -383,7 +439,7 @@ impl Orchestrator {
             return;
         };
         let ctx = crate::ai::ErrorContext {
-            error_message: format!("{}: {}", operation, err),
+            error_message: format!("{}: {}", operation, crate::ai::format_error_chain(err)),
             table_name: table.name.clone(),
             table_schema: table.schema.clone(),
             columns: table.columns.clone(),
@@ -404,6 +460,26 @@ impl Orchestrator {
         _table: &crate::core::schema::Table,
         _err: &crate::error::MigrateError,
     ) {
+    }
+
+    /// Bundle the AI-diagnosis prereqs (diagnoser + source/target db type
+    /// strings + target mode) into a cheaply clonable value that can be
+    /// moved into `tokio::spawn`'d tasks, which don't have `&self` access.
+    /// Returns a no-op stub when the `ai` feature is disabled.
+    async fn spawn_diagnose_ctx(&self) -> SpawnDiagnoseCtx {
+        #[cfg(feature = "ai")]
+        {
+            SpawnDiagnoseCtx {
+                diagnoser: self.get_error_diagnoser().await,
+                src_db: self.source.db_type().to_string(),
+                tgt_db: self.target.db_type().to_string(),
+                tgt_mode: format!("{:?}", self.config.migration.target_mode),
+            }
+        }
+        #[cfg(not(feature = "ai"))]
+        {
+            SpawnDiagnoseCtx
+        }
     }
 
     /// Enable progress reporting to stderr as JSON lines.
@@ -1161,7 +1237,7 @@ impl Orchestrator {
         let mut tables_first_sync: usize = 0;
         let mut tables_no_date_column: usize = 0;
 
-        for table in pending_tables {
+        for table in pending_tables.iter().copied() {
             // Check for cancellation
             if cancel.is_cancelled() {
                 info!("Cancellation requested, stopping new transfers");
@@ -1418,6 +1494,15 @@ impl Orchestrator {
                     if let Some(token) = table_cancel_tokens.get(&base_table) {
                         token.cancel();
                     }
+                    // Fire AI diagnosis on first failure per table (cache
+                    // dedups repeat invocations for the same error message).
+                    if !table_errors.contains_key(&base_table) {
+                        if let Some(table) =
+                            pending_tables.iter().find(|t| t.full_name() == base_table)
+                        {
+                            self.diagnose_schema_error("TRANSFER", table, e).await;
+                        }
+                    }
                     // Preserve first error for this table (don't overwrite if partition already failed)
                     table_errors
                         .entry(base_table.clone())
@@ -1599,11 +1684,13 @@ impl Orchestrator {
                     max_tasks
                 );
                 let mut handles = Vec::new();
+                let diagctx = self.spawn_diagnose_ctx().await;
 
                 for table in tables_with_pk {
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let target = self.target.clone();
                     let schema = target_schema.to_string();
+                    let dc = diagctx.clone();
 
                     let handle = tokio::spawn(async move {
                         let _permit = permit;
@@ -1622,6 +1709,7 @@ impl Orchestrator {
                             }
                             Err(e) => {
                                 warn!("Failed to create PK on {}: {}", table_name, e);
+                                dc.fire("CREATE PRIMARY KEY", &table, &e).await;
                                 Err(format!("PK creation failed on {}: {}", table_name, e))
                             }
                         }
@@ -1665,11 +1753,13 @@ impl Orchestrator {
                     max_tasks
                 );
                 let mut handles = Vec::new();
+                let diagctx = self.spawn_diagnose_ctx().await;
 
                 for table in tables_with_indexes {
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let target = self.target.clone();
                     let schema = target_schema.to_string();
+                    let dc = diagctx.clone();
 
                     let handle = tokio::spawn(async move {
                         let _permit = permit;
@@ -1677,6 +1767,12 @@ impl Orchestrator {
                             debug!("Creating index: {}.{}", table.name, index.name);
                             if let Err(e) = target.create_index(&table, index, &schema).await {
                                 warn!("Failed to create index {}: {}", index.name, e);
+                                dc.fire(
+                                    &format!("CREATE INDEX {}", index.name),
+                                    &table,
+                                    &e,
+                                )
+                                .await;
                             }
                         }
                     });
@@ -1703,6 +1799,7 @@ impl Orchestrator {
                     levels.len()
                 );
 
+                let diagctx = self.spawn_diagnose_ctx().await;
                 for (level_idx, level_tables) in levels.iter().enumerate() {
                     debug!(
                         "Processing FK level {} with {} tables",
@@ -1719,6 +1816,7 @@ impl Orchestrator {
                         let permit = semaphore.clone().acquire_owned().await.unwrap();
                         let target = self.target.clone();
                         let schema = target_schema.to_string();
+                        let dc = diagctx.clone();
 
                         let handle = tokio::spawn(async move {
                             let _permit = permit;
@@ -1727,6 +1825,12 @@ impl Orchestrator {
                                 if let Err(e) = target.create_foreign_key(&table, fk, &schema).await
                                 {
                                     warn!("Failed to create FK {}: {}", fk.name, e);
+                                    dc.fire(
+                                        &format!("CREATE FOREIGN KEY {}", fk.name),
+                                        &table,
+                                        &e,
+                                    )
+                                    .await;
                                 }
                             }
                         });
@@ -1758,11 +1862,13 @@ impl Orchestrator {
                     max_tasks
                 );
                 let mut handles = Vec::new();
+                let diagctx = self.spawn_diagnose_ctx().await;
 
                 for table in tables_with_checks {
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let target = self.target.clone();
                     let schema = target_schema.to_string();
+                    let dc = diagctx.clone();
 
                     let handle = tokio::spawn(async move {
                         let _permit = permit;
@@ -1772,6 +1878,12 @@ impl Orchestrator {
                                 target.create_check_constraint(&table, chk, &schema).await
                             {
                                 warn!("Failed to create check {}: {}", chk.name, e);
+                                dc.fire(
+                                    &format!("CREATE CHECK CONSTRAINT {}", chk.name),
+                                    &table,
+                                    &e,
+                                )
+                                .await;
                             }
                         }
                     });
