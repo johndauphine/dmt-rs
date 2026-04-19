@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.45.1] - 2026-04-19
+
+### Build
+- **Release binaries now ship with `mysql`, `tui`, and `ai` features enabled.** Prior releases used default features only (`default = []`), so downloaded binaries failed at runtime for any MySQL target with "MySQL target requires the 'mysql' feature." The `kerberos` feature is still off in releases to avoid GSSAPI cross-compile complexity on linux-arm64 — build from source if you need it.
+
+### Documentation
+- Consolidated 6 benchmark docs into `docs/benchmarks.md` (current numbers, performance model, reproduction) and `docs/benchmarks-archive.md` (historical experiments with "superseded by" pointers). The former "120 K MySQL target ceiling" finding is corrected — v1.45 measures 369-452 K rows/s.
+
 ## [1.45.0] - 2026-04-19
 
 ### Performance

@@ -36,6 +36,8 @@ migration-logs-*.txt
 # Local benchmark artifacts
 .bench-logs/
 .bench-logs-*/
+.bench-*.yaml
+.bench-*.log
 
 # Screenshots
 Screenshot*.png

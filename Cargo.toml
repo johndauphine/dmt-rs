@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/dmt-rs", "crates/dmt-rs-cli"]
 
 [workspace.package]
-version = "1.45.0"
+version = "1.45.1"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
