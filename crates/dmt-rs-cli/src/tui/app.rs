@@ -240,6 +240,18 @@ impl TranscriptEntry {
             timestamp: Instant::now(),
         }
     }
+
+    /// Raw transcript line with a space icon. Used for continuation lines
+    /// of multi-line content (e.g., the boxed AI error diagnosis) where
+    /// the regular icon prefix would break visual alignment.
+    pub fn raw(message: impl Into<String>) -> Self {
+        Self {
+            icon: ' ',
+            message: message.into(),
+            detail: None,
+            timestamp: Instant::now(),
+        }
+    }
 }
 
 /// Summary of loaded configuration.
@@ -613,11 +625,20 @@ impl App {
 
             #[cfg(feature = "ai")]
             AppEvent::DiagnosisReceived(diag) => {
-                // Render the boxed diagnosis as an error-styled transcript
-                // entry. The library would otherwise emit it via `tracing::warn!`,
-                // which in TUI mode would only appear in the log panel —
-                // the transcript is more prominent and less likely to be missed.
-                self.add_error(diag.format_boxed());
+                // The boxed diagnosis is multi-line. The transcript widget
+                // renders one `ratatui::text::Line` per entry, so a single
+                // entry containing `\n` only shows its first visual row.
+                // Split and emit each box line as its own entry: the first
+                // line gets the error icon for colour, the rest use a
+                // space-icon "raw" entry so the box borders stay aligned.
+                let boxed = diag.format_boxed();
+                let mut lines = boxed.lines();
+                if let Some(first) = lines.next() {
+                    self.add_transcript(TranscriptEntry::error(first.to_string()));
+                }
+                for line in lines {
+                    self.add_transcript(TranscriptEntry::raw(line.to_string()));
+                }
             }
 
             AppEvent::Success(msg) => {
