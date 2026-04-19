@@ -177,18 +177,16 @@ impl PostgresWriter {
         // Unlike MySQL (clustered on PK), PG heap storage is not PK-organized;
         // this collapses the per-table finalize DDL round-trip but may increase
         // COPY cost for large tables as btree is maintained incrementally.
+        // Emit unnamed so PG auto-generates `<table>_pkey`, avoiding the
+        // 63-byte identifier limit on synthesized names for long schema/table
+        // combinations.
         let pk_clause = if !table.primary_key.is_empty() {
             let pk_cols: Vec<String> = table
                 .primary_key
                 .iter()
                 .map(|c| Self::quote_ident(c))
                 .collect::<Result<Vec<_>>>()?;
-            let pk_name = format!("pk_{}_{}", target_schema, table.name);
-            format!(
-                ",\n    CONSTRAINT {} PRIMARY KEY ({})",
-                quote_ident_unchecked(&pk_name),
-                pk_cols.join(", ")
-            )
+            format!(",\n    PRIMARY KEY ({})", pk_cols.join(", "))
         } else {
             String::new()
         };

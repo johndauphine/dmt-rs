@@ -20,8 +20,9 @@
 # isolate the finalize PK delta from overall wall-clock.
 #
 # Expects:
-#   - mssql-bench running, StackOverflow2010 on :1433
-#   - pg-source   running on :5432 with a stackoverflow_target DB reachable
+#   - pg-source running on :5432 with database `stackoverflow2010` as source
+#     (the script manages `stackoverflow_target` on the same instance as the
+#     target DB — dropping and recreating it between runs).
 #   - Two binaries: baseline (pre-fix) and inline-pk (post-fix). Build both.
 #
 # BUILD (run from repo root):
