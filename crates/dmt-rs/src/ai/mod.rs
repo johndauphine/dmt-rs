@@ -8,12 +8,17 @@
 
 mod cache;
 mod config;
+mod errordiag;
 mod mapper;
 mod prompt;
 mod provider;
 
 pub use cache::TypeCache;
 pub use config::{AiConfig, AiProvider, GlobalConfig};
+pub use errordiag::{
+    emit_diagnosis, set_diagnosis_handler, DiagnosisHandler, ErrorContext, ErrorDiagnoser,
+    ErrorDiagnosis,
+};
 pub use mapper::AiTypeMapper;
 pub use prompt::PromptContext;
-pub use provider::{AiProviderClient, create_provider};
+pub use provider::{create_provider, AiProviderClient};
