@@ -625,19 +625,24 @@ impl App {
 
             #[cfg(feature = "ai")]
             AppEvent::DiagnosisReceived(diag) => {
-                // The boxed diagnosis is multi-line. The transcript widget
-                // renders one `ratatui::text::Line` per entry, so a single
-                // entry containing `\n` only shows its first visual row.
-                // Split and emit each box line as its own entry: the first
-                // line gets the error icon for colour, the rest use a
-                // space-icon "raw" entry so the box borders stay aligned.
-                let boxed = diag.format_boxed();
-                let mut lines = boxed.lines();
-                if let Some(first) = lines.next() {
-                    self.add_transcript(TranscriptEntry::error(first.to_string()));
-                }
-                for line in lines {
-                    self.add_transcript(TranscriptEntry::raw(line.to_string()));
+                // Don't use format_boxed() here — the transcript pane is
+                // narrower than 72 cols on most terminals, so the fixed-
+                // width box gets clipped and suggestions get chopped
+                // mid-word at the right edge. Emit structured per-line
+                // entries instead: each line is one transcript row, the
+                // List widget handles its own clipping, and long
+                // suggestions wrap at the natural boundary rather than
+                // inside a rigid frame.
+                self.add_transcript(TranscriptEntry::error(format!(
+                    "AI Diagnosis — {} (confidence: {})",
+                    diag.category, diag.confidence
+                )));
+                self.add_transcript(TranscriptEntry::raw(format!("Cause: {}", diag.cause)));
+                if !diag.suggestions.is_empty() {
+                    self.add_transcript(TranscriptEntry::raw("Suggestions:".to_string()));
+                    for (i, s) in diag.suggestions.iter().enumerate() {
+                        self.add_transcript(TranscriptEntry::raw(format!("  {}. {}", i + 1, s)));
+                    }
                 }
             }
 
