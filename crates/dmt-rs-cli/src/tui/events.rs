@@ -69,6 +69,12 @@ pub enum AppEvent {
     /// Error occurred.
     Error(String),
 
+    /// AI-generated diagnosis for a migration error. Emitted by the
+    /// library's diagnosis handler that TUI mode registers at startup;
+    /// rendered into the transcript as an error-styled boxed entry.
+    #[cfg(feature = "ai")]
+    DiagnosisReceived(dmt_rs::ai::ErrorDiagnosis),
+
     /// Success message for transcript.
     Success(String),
 

@@ -240,6 +240,18 @@ impl TranscriptEntry {
             timestamp: Instant::now(),
         }
     }
+
+    /// Raw transcript line with a space icon. Used for continuation lines
+    /// of multi-line content (e.g., the boxed AI error diagnosis) where
+    /// the regular icon prefix would break visual alignment.
+    pub fn raw(message: impl Into<String>) -> Self {
+        Self {
+            icon: ' ',
+            message: message.into(),
+            detail: None,
+            timestamp: Instant::now(),
+        }
+    }
 }
 
 /// Summary of loaded configuration.
@@ -381,6 +393,12 @@ pub struct App {
     // --- Wizard state ---
     /// Active wizard state (None when not in wizard mode).
     pub wizard: Option<WizardState>,
+
+    /// AI settings from the global config. Cloned into spawned migration
+    /// tasks so the Orchestrator they construct can be wrapped with
+    /// `.with_ai_config()`.
+    #[cfg(feature = "ai")]
+    ai_config: Option<dmt_rs::ai::AiConfig>,
 }
 
 impl App {
@@ -391,6 +409,7 @@ impl App {
         event_tx: mpsc::Sender<AppEvent>,
         palette_open: Arc<AtomicBool>,
         shared_input_mode: SharedInputMode,
+        #[cfg(feature = "ai")] ai_config: Option<dmt_rs::ai::AiConfig>,
     ) -> Self {
         let config_summary = ConfigSummary::from_config(&config, &config_path);
 
@@ -432,6 +451,8 @@ impl App {
             saved_input: String::new(),
             // Wizard state
             wizard: None,
+            #[cfg(feature = "ai")]
+            ai_config,
         };
 
         app.add_transcript(TranscriptEntry::info(format!(
@@ -600,6 +621,29 @@ impl App {
                 // Reset phase so user can try again
                 self.phase = MigrationPhase::Idle;
                 self.cancel_token = None;
+            }
+
+            #[cfg(feature = "ai")]
+            AppEvent::DiagnosisReceived(diag) => {
+                // Don't use format_boxed() here — the transcript pane is
+                // narrower than 72 cols on most terminals, so the fixed-
+                // width box gets clipped and suggestions get chopped
+                // mid-word at the right edge. Emit structured per-line
+                // entries instead: each line is one transcript row, the
+                // List widget handles its own clipping, and long
+                // suggestions wrap at the natural boundary rather than
+                // inside a rigid frame.
+                self.add_transcript(TranscriptEntry::error(format!(
+                    "AI Diagnosis — {} (confidence: {})",
+                    diag.category, diag.confidence
+                )));
+                self.add_transcript(TranscriptEntry::raw(format!("Cause: {}", diag.cause)));
+                if !diag.suggestions.is_empty() {
+                    self.add_transcript(TranscriptEntry::raw("Suggestions:".to_string()));
+                    for (i, s) in diag.suggestions.iter().enumerate() {
+                        self.add_transcript(TranscriptEntry::raw(format!("  {}. {}", i + 1, s)));
+                    }
+                }
             }
 
             AppEvent::Success(msg) => {
@@ -915,6 +959,8 @@ impl App {
         // Clone what we need for the spawned task
         let config = self.config.clone();
         let event_tx = self.event_tx.clone();
+        #[cfg(feature = "ai")]
+        let ai_config = self.ai_config.clone();
 
         // Create progress channel
         let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressUpdate>(100);
@@ -929,7 +975,16 @@ impl App {
 
         // Spawn migration task
         tokio::spawn(async move {
-            let result = Self::run_migration(config, progress_tx, cancel, dry_run, resume).await;
+            let result = Self::run_migration(
+                config,
+                progress_tx,
+                cancel,
+                dry_run,
+                resume,
+                #[cfg(feature = "ai")]
+                ai_config,
+            )
+            .await;
             match result {
                 Ok(migration_result) => {
                     let _ = event_tx
@@ -950,10 +1005,16 @@ impl App {
         cancel: CancellationToken,
         dry_run: bool,
         resume: bool,
+        #[cfg(feature = "ai")] ai_config: Option<dmt_rs::ai::AiConfig>,
     ) -> Result<MigrationResult, MigrateError> {
         let mut orchestrator = Orchestrator::new(config)
             .await?
             .with_progress_channel(progress_tx);
+
+        #[cfg(feature = "ai")]
+        if let Some(ref cfg) = ai_config {
+            orchestrator = orchestrator.with_ai_config(cfg);
+        }
 
         if resume {
             orchestrator = orchestrator.resume().await?;
