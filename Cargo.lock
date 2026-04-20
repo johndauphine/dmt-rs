@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "dmt-rs"
-version = "1.45.1"
+version = "1.46.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "dmt-rs-cli"
-version = "1.45.1"
+version = "1.46.0"
 dependencies = [
  "anyhow",
  "assert_cmd",

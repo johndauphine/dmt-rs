@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.46.0] - 2026-04-19
+
+### Features
+- **AI-powered error diagnosis** (#123, #124, #125) — Mirrors Go dmt's `ai_errordiag.go`. When AI is configured, failed DDL operations (CREATE TABLE / PRIMARY KEY / INDEX / FK / CHECK across both `prepare_target` and `finalize`) and transfer writer errors are sent to the configured LLM with schema context; the structured response (cause / 2-3 suggestions / confidence / 6-category taxonomy) is cached by SHA-256 error hash and emitted via a pluggable handler. Activation: no flag or new config field — reuses the existing `ai:` section in `~/.dmt-rs/dmt-rs-config.yaml`.
+  - Walks the full `error.source()` chain so the LLM sees the real detail (e.g., `"permission denied for schema public"`) instead of just the top-level `Display` message (`"db error"`).
+  - Per-key `tokio::sync::Mutex` in-flight dedup: N parallel spawned tasks hitting the same error fire exactly one provider request, not N.
+  - TUI mode registers a diagnosis handler that renders each diagnosis as structured transcript entries (header + cause + numbered suggestions); CLI mode falls back to a boxed `tracing::warn!` rendering. Diagnosis in TUI is non-blocking — transfer-failure diagnoses spawn in the background so they don't delay cancellation or sibling shutdown.
+
 ## [1.45.1] - 2026-04-19
 
 ### Build
