@@ -36,9 +36,34 @@ directions use a warm-up discard + single measurement.
 
 v1.46 vs v1.44 for the non-MySQL directions (2026-04-20 rerun): `pg →
 pg` +3 %, `mssql → pg` **+32 %**, `mssql → mssql` +5 %, `pg → mssql`
-+6 %. The standout is `mssql → pg`: 450 K → 596 K rows/s, attributable
-to the inline-PK work (v1.45) + post-load PK-elimination cascade into
-COPY-bound directions. No regressions observed.
++6 %. Only `mssql → pg` is a real improvement; the other three are
+within single-run measurement noise.
+
+**Why it's lopsided.** The only v1.45+ change touching these
+directions is **inline PRIMARY KEY on PG targets** ([PR #122](https://github.com/johndauphine/dmt-rs/pull/122)).
+Before: `CREATE TABLE` without PK, COPY rows, then
+`ALTER TABLE ADD CONSTRAINT PRIMARY KEY` in a serial Phase 4. After:
+PK declared inline, PG maintains the btree incrementally during
+COPY, Phase 4 is a no-op. The PK-build cost **moves from Phase 4
+into COPY** — net outcome depends on whether the writer has spare
+CPU during COPY:
+
+- **`mssql → pg`**: MSSQL source reads Posts at ~100 K rows/s via
+  Rosetta 2. PG writer sits idle most of COPY waiting for data.
+  Inline PK maintenance fits into those idle windows at near-zero
+  marginal cost. Phase 4's ~8 s is effectively eliminated.
+- **`pg → pg`**: PG source reads at ~2 M rows/s. Writer is CPU-bound
+  during COPY with no idle windows. Inline PK extends COPY by almost
+  as much as it saves on Phase 4. Net wash.
+- **`mssql → mssql`, `pg → mssql`**: MSSQL target, **no inline-PK
+  change exists for MSSQL** (only [#121](https://github.com/johndauphine/dmt-rs/pull/121)
+  MySQL and [#122](https://github.com/johndauphine/dmt-rs/pull/122)
+  PG). Both still pay full Phase 4 cost; the +5–6 % is noise.
+
+Rule: **inline PK on PG helps proportionally to how slow the source
+is** — the commit message on #122 called this out explicitly
+(*"may increase COPY cost for large tables as btree is maintained
+incrementally"*). Fast sources pay back what the commit gives.
 
 ### 1.2 Key takeaways
 
