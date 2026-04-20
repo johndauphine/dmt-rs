@@ -8,7 +8,7 @@ what's here.
 
 **Dataset:** StackOverflow 2010 (Brent Ozar), 19 310 703 rows across 9
 tables. **Current reference host:** M3 Max 36 GB (Mac15,10, 14 cores).
-**Binary:** dmt-rs v1.45.0 with `--features mysql`.
+**Binary:** dmt-rs v1.46.0 with `--features mysql,tui,ai`.
 
 ---
 
@@ -20,30 +20,32 @@ parallel readers / 3 write-ahead writers. Each target database is
 dropped and recreated before its measurement; MSSQL-involved
 directions use a warm-up discard + single measurement.
 
-### 1.1 Current (2026-04-19, v1.45.0, M3 Max 36 GB)
+### 1.1 Current (v1.46.0, M3 Max 36 GB)
 
-| # | Direction | Duration | **Throughput** |
-|--:|---|---:|---:|
-| 1 | mysql → pg | 20.09 s | **961 K rows/s** |
-| 2 | pg → pg † | 25.59 s | 755 K rows/s |
-| 3 | mssql → mssql † | 36.43 s | 530 K rows/s |
-| 4 | mysql → mysql (cross-container) | 42.76 s | 452 K rows/s |
-| 5 | mssql → pg † | 42.87 s | 450 K rows/s |
-| 6 | mssql → mysql | 43.78 s | 441 K rows/s |
-| 7 | pg → mysql | 45.23 s | 427 K rows/s |
-| 8 | mysql → mssql | 52.32 s | 369 K rows/s |
-| 9 | pg → mssql † | 63.84 s | 302 K rows/s |
+| # | Direction | Duration | **Throughput** | Measured |
+|--:|---|---:|---:|---|
+| 1 | mysql → pg | 20.09 s | **961 K rows/s** | 2026-04-19 (v1.45.0) |
+| 2 | pg → pg | 24.73 s | 781 K rows/s | 2026-04-20 (v1.46.0) |
+| 3 | mssql → pg | 32.40 s | 596 K rows/s | 2026-04-20 (v1.46.0) |
+| 4 | mssql → mssql | 34.75 s | 556 K rows/s | 2026-04-20 (v1.46.0) |
+| 5 | mysql → mysql (cross-container) | 42.76 s | 452 K rows/s | 2026-04-19 (v1.45.0) |
+| 6 | mssql → mysql | 43.78 s | 441 K rows/s | 2026-04-19 (v1.45.0) |
+| 7 | pg → mysql | 45.23 s | 427 K rows/s | 2026-04-19 (v1.45.0) |
+| 8 | mysql → mssql | 52.32 s | 369 K rows/s | 2026-04-19 (v1.45.0) |
+| 9 | pg → mssql | 60.07 s | 321 K rows/s | 2026-04-20 (v1.46.0) |
 
-† Measured 2026-04-11 on v1.44 (pre-inline-PK). These numbers likely
-improve by 10-30 % on v1.45 but have not been re-measured. MySQL rows
-(2026-04-19) are all v1.45.
+v1.46 vs v1.44 for the non-MySQL directions (2026-04-20 rerun): `pg →
+pg` +3 %, `mssql → pg` **+32 %**, `mssql → mssql` +5 %, `pg → mssql`
++6 %. The standout is `mssql → pg`: 450 K → 596 K rows/s, attributable
+to the inline-PK work (v1.45) + post-load PK-elimination cascade into
+COPY-bound directions. No regressions observed.
 
 ### 1.2 Key takeaways
 
 - **Fastest direction: `mysql → pg` at 961 K rows/s** — Postgres COPY
   BINARY absorbs the native-ARM MySQL source feed at near-native-PG
   speed.
-- **Slowest direction: `pg → mssql` at 302 K rows/s** — MSSQL target
+- **Slowest direction: `pg → mssql` at 321 K rows/s** — MSSQL target
   via Rosetta 2 with LOB-heavy Posts table dominates.
 - **MySQL-as-target range: 369 K – 452 K rows/s.** Substantially
   higher than older published figures (see §3.1).
@@ -390,8 +392,6 @@ dmt-rs trails Go significantly on `mssql → pg upsert`; ~ties on
 
 ## 8. Open questions
 
-- **Re-run non-MySQL directions on v1.45.** The pg/mssql numbers in §1
-  are from v1.44. Inline PK should improve them 10-30 %.
 - **n=3 medians.** Current numbers are single-run measurements. The
   archived experiments used n=3; for statistical comparability a
   follow-up should match.
