@@ -10,7 +10,122 @@ Ordering: most-recent-learning first.
 
 ---
 
-## 1. MySQL target ceiling is not 120 K / 165 K (v1.45, 2026-04-19)
+## 1. PG upsert profile: merge SQL dominates, not staging (v1.46, 2026-04-23)
+
+**Purpose:** After §6's correction removed "missing `IS DISTINCT
+FROM`" as the cause of the Go-vs-dmt-rs PG-upsert gap, profile where
+dmt-rs's PG upsert path actually spends time. Answer which layer to
+optimize before any further attribution.
+
+**Method:**
+
+- **Workload:** `pg → pg upsert`, 19.3 M rows (StackOverflow 2010),
+  target pre-populated identical to source so `IS DISTINCT FROM`
+  skips every row. Isolates the staging-and-filter cost from actual
+  write cost.
+- **Binary:** dmt-rs v1.46.0 release build.
+- **Host:** M3 Max 36 GB. `pg-source` / `pg-target` containers, 3 GB
+  cgroups each.
+- **Instrumentation:** PG target `log_min_duration_statement = 0`,
+  `log_statement = 'all'` — captures every statement + its duration.
+  Client wrapped in `samply record` for CPU profile (browser-side
+  symbolication, not directly analyzed here since the server is
+  plainly the bottleneck).
+
+**Wall:** 35.0 s at 552 K rows/s. 3 parallel writers.
+
+**Server-side breakdown (146 s across 3 backends):**
+
+| Component | Total | % of server work | Avg / chunk |
+|---|---:|---:|---:|
+| `INSERT … ON CONFLICT` merge | 89.6 s | **61 %** | 270–435 ms |
+| `COPY` into staging table | 52.5 s | 36 % | 205 ms |
+| `CREATE TEMP` + `TRUNCATE` + `DROP` | 4.0 s | 2.7 % | < 10 ms |
+| `_dmt_rs` state bookkeeping | 0.02 s | < 0.1 % | 0.1 ms |
+
+**EXPLAIN ANALYZE on one 50 K-row Posts chunk:**
+
+| Variant | Duration | Shared hits | Dirtied | Written |
+|---|---:|---:|---:|---:|
+| `DO UPDATE … WHERE IS DISTINCT FROM` (what dmt-rs emits) | 294 ms | 257 K | 4 851 | 0 |
+| `DO NOTHING` (floor — just conflict detection) | 227 ms | 204 K | 2 617 | 0 |
+| `DO UPDATE` unconditional (force rewrite) | 748 ms | 587 K | 17 313 | 3 044 |
+
+**Findings:**
+
+1. **Per-chunk staging roundtrip is not the culprit.** `CREATE TEMP`
+   + `TRUNCATE` + `DROP` sum to 4 s — 2.7 % of server work. This
+   refutes the corrected-§6 follow-up hypothesis that the staging
+   roundtrip explained the Go gap.
+2. **The merge SQL itself is the bottleneck.** Every chunk: 50 000
+   btree probes on `posts_pkey` + 50 000 heap fetches for conflict
+   resolution + `IS DISTINCT FROM` evaluation across 19 non-PK cols,
+   including TOAST detoast of `body` on both sides (OR short-circuits
+   on TRUE; with target = source every column evaluates FALSE, so
+   every column is tested).
+3. **`IS DISTINCT FROM` costs only 66 ms per chunk (23 %).** Removing
+   it (switching to `DO NOTHING`) saves ~23 %. Keeping it prevents a
+   454 ms per-chunk unconditional UPDATE — the filter *is* doing real
+   work, not pure overhead.
+4. **The floor is the PK-probe path itself: 227 ms per 50 K-row
+   chunk.** Unavoidable for any `ON CONFLICT` shape. To go
+   meaningfully faster, reduce the number of PK probes, not the
+   conflict action.
+
+**Implication for the Go gap (§6):**
+
+The 34 s dmt-rs vs 24 s Go gap on `pg → pg` upsert cannot be closed
+by tweaking the conflict filter. Even eliminating `IS DISTINCT FROM`
+entirely would trim only ~6 s off the parallelized wall. Candidate
+explanations for Go's 24 s:
+
+- **Source-side watermark** (`date_updated_columns` — see §7). Takes
+  full-run time to effectively zero. Falsified below.
+- **PG 15 `MERGE`** with different arbiter semantics. Worth a
+  plan-comparison experiment on the same chunk.
+- **Different write parallelism** at the Go dispatcher — if Go runs
+  more parallel backends against the same PG cgroup, it completes
+  faster purely from parallelism. Our auto-tuner picked
+  `parallel_writers=3`.
+- **Client-side PK diff** (one `SELECT id FROM target WHERE id
+  BETWEEN ? AND ?` per chunk range, partition into new/existing,
+  plain `INSERT` for new rows with no `ON CONFLICT`). Unverified.
+
+**Watermark hypothesis test (follow-up, 2026-04-23):**
+
+Configured the same bench with `date_updated_columns:
+[lastactivitydate, lasteditdate, creationdate, lastaccessdate, date]`
+and ran twice back-to-back against the populated target.
+
+| Run | State at start | Rows transferred | Wall |
+|---|---|---:|---:|
+| 1 | empty (cold) | 19 310 703 | 35.7 s |
+| 2 | populated from run 1 | **25** | **0.75 s** |
+
+Run 2 is 48× faster than run 1. The 25 rows are exactly the 3 lookup
+tables (`linktypes` 2 + `posttypes` 8 + `votetypes` 15) that have no
+date columns and correctly fall back to full scan, matching §7's
+prediction.
+
+**Conclusion:** Go's 24 s on `pg → pg` upsert cannot have been from
+a watermark — with one configured, the same workload finishes in
+0.75 s, not 24 s. The watermark-asymmetry hypothesis is **falsified**.
+The ~10 s dmt-rs-vs-Go gap is within the full-upsert path itself,
+not a configuration difference.
+
+**Status:** §6 is now triply corrected — the original "missing `IS
+DISTINCT FROM`" attribution was wrong (§6 fix), the "staging
+roundtrip" hypothesis is wrong (first pass of this entry), and the
+"watermark asymmetry" hypothesis is also wrong (follow-up above).
+Remaining live candidates are plan-shape (`MERGE` vs `INSERT ON
+CONFLICT`), writer parallelism, and client-side PK diff. Next cheap
+experiment: run `dmt` Go side-by-side while counting concurrent PG
+backends and capturing the SQL it emits — answers both the parallelism
+and plan-shape questions in one shot.
+
+---
+
+## 2. MySQL target ceiling is not 120 K / 165 K (v1.45, 2026-04-19)
 
 **Superseded finding:** MySQL target throughput caps at ~120 K rows/s
 (M5 Pro) / ~165 K rows/s (M3 Max) due to MySQL's lack of a binary bulk
@@ -28,14 +143,14 @@ held the InnoDB checkpointer saturated for the back half of every
 run; on v1.45, there is no separate PK build phase.
 
 **Secondary finding:** MSSQL `max server memory` 4 096 → 10 240 MB
-bump yielded only +5-8 % on v1.45 (vs +36-41 % on v1.44 — §2 below).
+bump yielded only +5-8 % on v1.45 (vs +36-41 % on v1.44 — §3 below).
 Inline PK also ate most of the MSSQL-buffer-pool headroom.
 
 Current numbers: see [`benchmarks.md`](benchmarks.md) §1.1.
 
 ---
 
-## 2. MSSQL `max server memory` 10 240 MB experiment (v1.44, 2026-04-17)
+## 3. MSSQL `max server memory` 10 240 MB experiment (v1.44, 2026-04-17)
 
 **Hypothesis:** On a 36 GB host, giving MSSQL 10 GiB `max server
 memory` (vs the 4 GiB M5 Pro cap) would unlock the `mssql → mysql`
@@ -65,7 +180,7 @@ target-side session-tuning benefit. This eventually motivated
 removing the `mysql_bulk_session_tuning` config knob entirely (PR #120).
 
 **Superseded magnitude:** The v1.45 re-measurement shows only +5-8 %
-from the same RAM bump (see §1 above). Inline PK already eliminated
+from the same RAM bump (see §2 above). Inline PK already eliminated
 most of the dirty-page pressure that the bigger buffer pool was
 absorbing on v1.44.
 
@@ -86,7 +201,7 @@ experiment:
 
 ---
 
-## 3. M3 Max cross-hardware validation (v1.44, 2026-04-11)
+## 4. M3 Max cross-hardware validation (v1.44, 2026-04-11)
 
 **Purpose:** Test the playbook's §2 hypothesis that Apple Silicon
 dmt-rs benchmarks are "memory-bound in the Docker VM, not CPU-bound"
@@ -125,7 +240,7 @@ This experiment produced the performance model now summarized in
 
 ---
 
-## 4. MySQL target container tuning (v1.42-era, various dates)
+## 5. MySQL target container tuning (v1.42-era, various dates)
 
 **Purpose:** Find the right MySQL target container configuration for
 the SO2010 workload.
@@ -179,7 +294,7 @@ config documentation.
 
 ---
 
-## 5. Go vs dmt-rs head-to-head (2026-04-14, M5 Pro 24 GB)
+## 6. Go vs dmt-rs head-to-head (2026-04-14, M5 Pro 24 GB)
 
 **Purpose:** Side-by-side comparison of `dmt` (Go, v3.54.0) and
 `dmt-rs` across the full 2 × 2 × 2 matrix (direction × mode × engine)
@@ -205,10 +320,24 @@ on identical infrastructure and same session.
    `pg → mssql` and 1.73× on `mssql → mssql`. A potential replacement
    for tiberius is tracked in
    [`mssql-client-spike.md`](mssql-client-spike.md).
-2. **Upsert on PG targets.** dmt-rs's `INSERT … ON CONFLICT DO
-   UPDATE` chunking does not yet implement `IS DISTINCT FROM`
-   skip-unchanged. Costs 1.43× on `pg → pg` upsert and 2.26× on
-   `mssql → pg` upsert.
+2. **Upsert on PG targets.** Root cause is the per-chunk `INSERT ON
+   CONFLICT` merge itself — not missing `IS DISTINCT FROM`, not the
+   staging roundtrip. The original writeup attributed the gap to
+   missing `IS DISTINCT FROM` skip-unchanged, but that optimization
+   had already shipped in commit `3389cd5` (v1.43.0) — two days
+   before this benchmark ran (confirmed at
+   `crates/dmt-rs/src/drivers/postgres/writer.rs:476` and `:1061`).
+   §1 profiled the path on v1.46 and found 61 % of server-side work
+   is in the `INSERT ON CONFLICT` arbiter (50 K PK probes + heap
+   fetches per 50 K-row chunk); `IS DISTINCT FROM` adds only 23 %
+   on top; per-chunk staging lifecycle is 2.7 %. A watermark
+   asymmetry was tested and falsified — with `date_updated_columns`
+   configured, dmt-rs finishes the same workload in 0.75 s, so Go's
+   24 s cannot have been a watermark either. The gap sits inside
+   the full-upsert path; remaining candidates are plan shape
+   (`MERGE` vs `INSERT ON CONFLICT`), write parallelism, and
+   client-side PK diff. Costs 1.43× on `pg → pg` upsert and 2.26×
+   on `mssql → pg` upsert.
 3. **MSSQL source reads.** Even on directions where the target is
    fast, Go reads from MSSQL faster than dmt-rs — suggesting tiberius
    source-side query streaming is slower than Go's driver, not just
@@ -218,14 +347,19 @@ on identical infrastructure and same session.
 (TABLOCK)` per-chunk staging (PRs #100, #102) is competitive on
 `mssql → mssql`, but PG-target upsert is the weakest direction.
 
-**Status (2026-04-19):** Not yet re-run on M3 Max 36 GB or against
-v1.45. Inline PK in v1.45 should narrow the `drop_recreate`
+**Status (2026-04-23):** Not yet re-run on M3 Max 36 GB or against
+v1.45+. Inline PK in v1.45 should narrow the `drop_recreate`
 `mssql → *` gaps but is unlikely to change the upsert ranking, since
-upsert costs are in the update path, not finalization.
+upsert costs are in the update path, not finalization. §1 rules out
+three candidate explanations for the PG-upsert gap (missing IS
+DISTINCT FROM, staging roundtrip, watermark asymmetry). Remaining
+live candidates are plan shape, write parallelism, and client-side
+PK diff — a side-by-side Go run with backend-count and emitted-SQL
+capture answers all three in one shot and is the clean next step.
 
 ---
 
-## 6. Latest incremental-upsert optimization (PR #108, 2026-04-16)
+## 7. Latest incremental-upsert optimization (PR #108, 2026-04-16)
 
 **Change:** `Config::hash()` no longer includes `target_mode`, so a
 `drop_recreate` run followed by `upsert` against the same source /
@@ -244,7 +378,7 @@ correctly fall back to a full scan.
 
 ---
 
-## 7. Retired experiments / dead scripts
+## 8. Retired experiments / dead scripts
 
 Benchmarks whose scripts were removed from the repo but whose data
 informed current decisions. Recover by:
@@ -255,7 +389,7 @@ git log --diff-filter=D --follow -- scripts/bench-mysql-full-schema.sh
 ```
 
 - **`bench-mysql-tuning.sh`** — A/B of the `mysql_bulk_session_tuning`
-  config knob. Removed when the knob was retired (PR #120) after §2
+  config knob. Removed when the knob was retired (PR #120) after §3
   above showed it was noise at 10 GiB MSSQL RAM.
 - **`bench-mysql-full-schema.sh`** — full-schema variant of the tuning
   bench. Same fate as the knob.
