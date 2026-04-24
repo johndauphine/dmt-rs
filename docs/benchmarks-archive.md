@@ -113,15 +113,60 @@ a watermark — with one configured, the same workload finishes in
 The ~10 s dmt-rs-vs-Go gap is within the full-upsert path itself,
 not a configuration difference.
 
-**Status:** §6 is now triply corrected — the original "missing `IS
-DISTINCT FROM`" attribution was wrong (§6 fix), the "staging
-roundtrip" hypothesis is wrong (first pass of this entry), and the
-"watermark asymmetry" hypothesis is also wrong (follow-up above).
-Remaining live candidates are plan-shape (`MERGE` vs `INSERT ON
-CONFLICT`), writer parallelism, and client-side PK diff. Next cheap
-experiment: run `dmt` Go side-by-side while counting concurrent PG
-backends and capturing the SQL it emits — answers both the parallelism
-and plan-shape questions in one shot.
+**Side-by-side Go run + parallelism test (follow-up, 2026-04-23):**
+
+Built Go `dmt` from main (`v3.54.0-99-g1b53a16`) and ran the same
+pg → pg upsert against the same containers. Captured PG target log
+for SQL shape and sampled `pg_stat_activity` at 2 Hz for peak
+concurrent active backends.
+
+| Config | Peak active backends | Wall |
+|---|---:|---:|
+| Go dmt (workers 4, AI-tuned `max_partitions=12`) | 7 | **22.0 s** |
+| dmt-rs default (`parallel_writers=3` auto) | ~3 | 31.8 s |
+| dmt-rs `parallel_writers=5` + `parallel_readers=5` | — | 32.7 s |
+| dmt-rs `parallel_writers=8`, `max_partitions=12`, `large_table_threshold=1 M`, `pg_conns=32` | **32** | 47.3 s |
+
+**SQL shape is identical.** Go emits exactly the same
+`INSERT … ON CONFLICT (pk) DO UPDATE SET … WHERE (target-tuple) IS
+DISTINCT FROM (EXCLUDED-tuple)` statement dmt-rs does, byte-for-byte
+on the column lists. No `MERGE`, no client-side PK diff — plan-shape
+and client-diff hypotheses **falsified**.
+
+**Mechanical differences:**
+
+- Staging-table reuse: Go keeps **18 persistent `_stg_<hash>`
+  tables**, `TRUNCATE`s between chunks (455 merges × 6.85 COPYs per
+  merge). dmt-rs `CREATE TEMP` + `DROP TABLE` per chunk (~600 unique
+  staging tables). §1 measured this lifecycle at 4 s of server work.
+- COPY chunking: Go emits ~7 COPY statements per merge chunk. dmt-rs
+  emits ~1.
+
+**Write-parallelism hypothesis is also falsified.** Pushing dmt-rs to
+higher concurrency makes it **slower**, not faster. At
+`parallel_writers=8 + max_partitions=12` dmt-rs runs 32 concurrent
+backends (vs Go's 7) and lands at 47 s — the PG target's 3 GB cgroup
+can't absorb the extra write concurrency. Go at peak 7 finishes in
+22 s; dmt-rs at peak 3 finishes in 32 s. Per-backend throughput is
+the thing that differs, not scheduler concurrency.
+
+**Status:** four hypotheses ruled out (missing `IS DISTINCT FROM`,
+staging roundtrip, watermark asymmetry, writer parallelism), one
+ruled out by the side-by-side (`MERGE` plan shape, client-side PK
+diff). Remaining live candidates are all **code-level, not config**:
+
+- **COPY BINARY encoder throughput.** Rust `postgres-protocol` COPY
+  may be slower per row than Go's `pgx` COPY. Needs a targeted
+  micro-benchmark (stream 50 K rows into a single temp table via
+  each client, compare).
+- **Staging-table reuse** (the 4 s lifecycle cost in §1's
+  breakdown). Code change in the Rust writer, not config.
+- **tokio-postgres per-statement / per-connection overhead.**
+  Harder to isolate without a profiling probe.
+
+No more cheap config experiments remain. Closing the gap further
+requires either a per-row COPY micro-benchmark (to confirm the
+encoder candidate) or a staging-reuse prototype in the writer.
 
 ---
 
@@ -320,24 +365,24 @@ on identical infrastructure and same session.
    `pg → mssql` and 1.73× on `mssql → mssql`. A potential replacement
    for tiberius is tracked in
    [`mssql-client-spike.md`](mssql-client-spike.md).
-2. **Upsert on PG targets.** Root cause is the per-chunk `INSERT ON
-   CONFLICT` merge itself — not missing `IS DISTINCT FROM`, not the
-   staging roundtrip. The original writeup attributed the gap to
-   missing `IS DISTINCT FROM` skip-unchanged, but that optimization
-   had already shipped in commit `3389cd5` (v1.43.0) — two days
-   before this benchmark ran (confirmed at
-   `crates/dmt-rs/src/drivers/postgres/writer.rs:476` and `:1061`).
-   §1 profiled the path on v1.46 and found 61 % of server-side work
-   is in the `INSERT ON CONFLICT` arbiter (50 K PK probes + heap
-   fetches per 50 K-row chunk); `IS DISTINCT FROM` adds only 23 %
-   on top; per-chunk staging lifecycle is 2.7 %. A watermark
-   asymmetry was tested and falsified — with `date_updated_columns`
-   configured, dmt-rs finishes the same workload in 0.75 s, so Go's
-   24 s cannot have been a watermark either. The gap sits inside
-   the full-upsert path; remaining candidates are plan shape
-   (`MERGE` vs `INSERT ON CONFLICT`), write parallelism, and
-   client-side PK diff. Costs 1.43× on `pg → pg` upsert and 2.26×
-   on `mssql → pg` upsert.
+2. **Upsert on PG targets.** Root cause is code-level, inside the
+   per-backend write path — not config, not plan shape, not
+   filtering. The original writeup attributed the gap to missing
+   `IS DISTINCT FROM`, but that optimization had already shipped
+   in commit `3389cd5` (v1.43.0), two days before this benchmark
+   ran. §1 progressively eliminated every remaining config or
+   query-shape hypothesis: staging roundtrip is 2.7 % of server
+   work, watermark asymmetry is falsified (dmt-rs with watermarks
+   finishes in 0.75 s), and a Go side-by-side on v3.54.0-99
+   showed identical `INSERT ON CONFLICT ... WHERE IS DISTINCT FROM`
+   SQL — no `MERGE`, no client-side PK diff. Parallelism is also
+   ruled out: pushing dmt-rs to 32 concurrent backends makes it
+   slower (47 s), while Go finishes at peak 7 active backends.
+   Remaining candidates are all code-level: COPY BINARY encoder
+   throughput per connection, staging-table reuse (Go keeps 18
+   persistent `_stg_<hash>` tables, `TRUNCATE`s between chunks),
+   and tokio-postgres per-statement overhead. Costs 1.43× on
+   `pg → pg` upsert and 2.26× on `mssql → pg` upsert.
 3. **MSSQL source reads.** Even on directions where the target is
    fast, Go reads from MSSQL faster than dmt-rs — suggesting tiberius
    source-side query streaming is slower than Go's driver, not just
@@ -347,15 +392,16 @@ on identical infrastructure and same session.
 (TABLOCK)` per-chunk staging (PRs #100, #102) is competitive on
 `mssql → mssql`, but PG-target upsert is the weakest direction.
 
-**Status (2026-04-23):** Not yet re-run on M3 Max 36 GB or against
-v1.45+. Inline PK in v1.45 should narrow the `drop_recreate`
-`mssql → *` gaps but is unlikely to change the upsert ranking, since
-upsert costs are in the update path, not finalization. §1 rules out
-three candidate explanations for the PG-upsert gap (missing IS
-DISTINCT FROM, staging roundtrip, watermark asymmetry). Remaining
-live candidates are plan shape, write parallelism, and client-side
-PK diff — a side-by-side Go run with backend-count and emitted-SQL
-capture answers all three in one shot and is the clean next step.
+**Status (2026-04-23):** `drop_recreate` matrix not yet re-run on
+M3 Max 36 GB or against v1.45+. Inline PK in v1.45 should narrow
+the `drop_recreate` `mssql → *` gaps but is unlikely to change the
+upsert ranking, since upsert costs are in the update path, not
+finalization. For the **PG-upsert cell specifically** (pg→pg
+upsert, row 6), §1 has now eliminated every config-level and
+query-shape hypothesis via direct measurement on v1.46 / M3 Max;
+the remaining gap is inside the code-level write path and needs
+either a COPY-encoder micro-benchmark or a staging-reuse prototype
+to resolve further.
 
 ---
 
