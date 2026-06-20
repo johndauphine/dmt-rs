@@ -925,10 +925,21 @@ fn convert_row_value(row: &Row, idx: usize, data_type: &str) -> SqlValue<'static
             .get::<&[u8], _>(idx)
             .map(|v| SqlValue::Bytes(Cow::Owned(v.to_vec())))
             .unwrap_or(SqlValue::Null(SqlNullType::Bytes)),
-        "decimal" | "numeric" | "money" | "smallmoney" => row
+        "decimal" | "numeric" => row
             .get::<rust_decimal::Decimal, _>(idx)
             .map(SqlValue::Decimal)
             .unwrap_or(SqlValue::Null(SqlNullType::Decimal)),
+        "money" | "smallmoney" => {
+            // Tiberius transmits money/smallmoney as F64 in some configurations;
+            // reading directly as Decimal would panic. Convert via f64 instead.
+            if let Some(f) = row.get::<f64, _>(idx) {
+                rust_decimal::Decimal::try_from(f)
+                    .map(SqlValue::Decimal)
+                    .unwrap_or(SqlValue::Null(SqlNullType::Decimal))
+            } else {
+                SqlValue::Null(SqlNullType::Decimal)
+            }
+        }
         "geography" | "geometry" => row
             .get::<&str, _>(idx)
             .map(|s| SqlValue::Text(Cow::Owned(s.to_string())))
@@ -995,10 +1006,21 @@ fn convert_row_value_for_target(row: &Row, idx: usize, data_type: &str) -> Targe
             .get::<&[u8], _>(idx)
             .map(|v| TargetSqlValue::Bytes(v.to_vec()))
             .unwrap_or(TargetSqlValue::Null(TargetSqlNullType::Bytes)),
-        "decimal" | "numeric" | "money" | "smallmoney" => row
+        "decimal" | "numeric" => row
             .get::<rust_decimal::Decimal, _>(idx)
             .map(TargetSqlValue::Decimal)
             .unwrap_or(TargetSqlValue::Null(TargetSqlNullType::Decimal)),
+        "money" | "smallmoney" => {
+            // Tiberius transmits money/smallmoney as F64 in some configurations;
+            // reading directly as Decimal would panic. Convert via f64 instead.
+            if let Some(f) = row.get::<f64, _>(idx) {
+                rust_decimal::Decimal::try_from(f)
+                    .map(TargetSqlValue::Decimal)
+                    .unwrap_or(TargetSqlValue::Null(TargetSqlNullType::Decimal))
+            } else {
+                TargetSqlValue::Null(TargetSqlNullType::Decimal)
+            }
+        }
         "geography" | "geometry" => row
             .get::<&str, _>(idx)
             .map(|s| TargetSqlValue::String(s.to_string()))

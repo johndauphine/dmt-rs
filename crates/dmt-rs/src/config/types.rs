@@ -1,6 +1,7 @@
 //! Configuration type definitions with auto-tuning based on system resources.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use sysinfo::System;
 use tracing::{info, warn};
@@ -366,6 +367,27 @@ impl fmt::Debug for TargetConfig {
     }
 }
 
+/// Per-table configuration overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TableOverride {
+    /// Custom SQL expressions for specific columns, keyed by column name.
+    /// Replaces the plain column reference in SELECT with the given expression,
+    /// aliased back to the original column name automatically.
+    ///
+    /// Write the expression in the source database's SQL dialect.
+    ///
+    /// Example (MSSQL):
+    /// ```yaml
+    /// table_overrides:
+    ///   Orders:
+    ///     column_expressions:
+    ///       OrderDate: "CONVERT(VARCHAR(10), [OrderDate], 120)"
+    ///       Amount: "CAST([Amount] AS FLOAT)"
+    /// ```
+    #[serde(default)]
+    pub column_expressions: HashMap<String, String>,
+}
+
 /// Migration behavior configuration.
 /// All performance-related fields use Option<T> to distinguish between
 /// "not set" (use auto-tuned default) and "explicitly set" (use provided value).
@@ -497,6 +519,10 @@ pub struct MigrationConfig {
     /// This reduces memory pressure for tables with large text columns.
     #[serde(default)]
     pub compress_text: bool,
+
+    /// Per-table configuration overrides (e.g. custom column expressions).
+    #[serde(default)]
+    pub table_overrides: HashMap<String, TableOverride>,
 }
 
 impl Default for MigrationConfig {
@@ -529,6 +555,7 @@ impl Default for MigrationConfig {
             memory_budget_percent: default_memory_budget_percent(),
             mysql_load_data: MysqlLoadData::default(),
             compress_text: false,
+            table_overrides: HashMap::new(),
         }
     }
 }

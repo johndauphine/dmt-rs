@@ -15,7 +15,7 @@ use crate::orchestrator::{SourcePoolImpl, TargetPoolImpl};
 use crate::target::SqlValue;
 use chrono::{DateTime, Utc};
 use futures::future::try_join_all;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -135,6 +135,10 @@ pub struct TransferJob {
 
     /// Date filter for incremental sync (upsert mode only).
     pub date_filter: Option<DateFilter>,
+
+    /// Custom SQL expressions for specific columns (column_name → SQL expression).
+    /// Populated from `migration.table_overrides` in config.
+    pub column_expressions: HashMap<String, String>,
 }
 
 /// Statistics from a transfer job.
@@ -390,6 +394,10 @@ impl TransferEngine {
             .iter()
             .map(|c| c.data_type.clone())
             .collect();
+        let col_exprs: Vec<Option<String>> = columns
+            .iter()
+            .map(|c| job.column_expressions.get(c).cloned())
+            .collect();
         let pk_cols: Vec<String> = job.table.primary_key.clone();
 
         // Determine if we can use parallel keyset pagination
@@ -423,9 +431,11 @@ impl TransferEngine {
         let chunk_size = self.config.chunk_size;
         let columns_clone = columns.clone();
         let col_types_clone = col_types.clone();
+        let col_exprs_clone = col_exprs.clone();
 
         let reader_handle = tokio::spawn(async move {
-            // Use COPY TO BINARY for PostgreSQL sources (4-5x faster)
+            // Use COPY TO BINARY for PostgreSQL sources (4-5x faster).
+            // Note: column_expressions are not applied on the COPY binary path.
             if use_copy_binary {
                 read_table_chunks_copy_binary(
                     source,
@@ -442,6 +452,7 @@ impl TransferEngine {
                     job_clone,
                     columns_clone,
                     col_types_clone,
+                    col_exprs_clone,
                     chunk_size,
                     num_readers,
                     read_tx,
@@ -453,6 +464,7 @@ impl TransferEngine {
                     job_clone,
                     columns_clone,
                     col_types_clone,
+                    col_exprs_clone,
                     chunk_size,
                     read_tx,
                 )
@@ -745,6 +757,7 @@ async fn read_table_chunks_parallel(
     job: TransferJob,
     columns: Vec<String>,
     col_types: Vec<String>,
+    col_exprs: Vec<Option<String>>,
     chunk_size: usize,
     num_readers: usize,
     tx: mpsc::Sender<RowChunk>,
@@ -794,6 +807,7 @@ async fn read_table_chunks_parallel(
         let table = job.table.clone();
         let columns = columns.clone();
         let col_types = col_types.clone();
+        let col_exprs = col_exprs.clone();
         let tx = tx.clone();
         let date_filter = job.date_filter.clone();
 
@@ -817,6 +831,7 @@ async fn read_table_chunks_parallel(
                 table,
                 columns,
                 col_types,
+                col_exprs,
                 start_pk,
                 range_max,
                 chunk_size,
@@ -864,6 +879,7 @@ async fn read_chunk_range(
     table: Table,
     columns: Vec<String>,
     col_types: Vec<String>,
+    col_exprs: Vec<Option<String>>,
     start_pk: Option<i64>,
     end_pk: i64,
     chunk_size: usize,
@@ -888,6 +904,7 @@ async fn read_chunk_range(
             &table,
             &columns,
             &col_types,
+            &col_exprs,
             last_pk,
             Some(end_pk),
             chunk_size,
@@ -959,6 +976,7 @@ async fn read_table_chunks(
     job: TransferJob,
     columns: Vec<String>,
     col_types: Vec<String>,
+    col_exprs: Vec<Option<String>>,
     chunk_size: usize,
     tx: mpsc::Sender<RowChunk>,
 ) -> Result<()> {
@@ -986,6 +1004,7 @@ async fn read_table_chunks(
                 table,
                 &columns,
                 &col_types,
+                &col_exprs,
                 last_pk,
                 max_pk,
                 chunk_size,
@@ -999,6 +1018,7 @@ async fn read_table_chunks(
                 table,
                 &columns,
                 &col_types,
+                &col_exprs,
                 total_rows as usize,
                 chunk_size,
             )
@@ -1074,6 +1094,7 @@ async fn read_chunk_keyset_fast(
     table: &Table,
     columns: &[String],
     col_types: &[String],
+    col_exprs: &[Option<String>],
     last_pk: Option<i64>,
     max_pk: Option<i64>,
     chunk_size: usize,
@@ -1085,12 +1106,23 @@ async fn read_chunk_keyset_fast(
     let is_postgres = db_type == "postgres";
     let is_mysql = db_type == "mysql";
 
-    // Build column list with appropriate quoting
+    // Build column list with appropriate quoting. If a column has a custom expression,
+    // emit `{expression} AS {quoted_name}` so the write side still sees the original name.
     let col_list = columns
         .iter()
         .zip(col_types.iter())
-        .map(|(c, t)| {
-            if is_postgres {
+        .zip(col_exprs.iter())
+        .map(|((c, t), expr)| {
+            if let Some(expression) = expr {
+                let alias = if is_postgres {
+                    quote_pg(c)?
+                } else if is_mysql {
+                    quote_mysql(c)?
+                } else {
+                    quote_mssql(c)?
+                };
+                Ok(format!("{} AS {}", expression, alias))
+            } else if is_postgres {
                 quote_pg(c)
             } else if is_mysql {
                 quote_mysql(c)
@@ -1211,6 +1243,7 @@ async fn read_chunk_offset(
     table: &Table,
     columns: &[String],
     col_types: &[String],
+    col_exprs: &[Option<String>],
     offset: usize,
     chunk_size: usize,
 ) -> Result<(Vec<Vec<SqlValue>>, Option<i64>)> {
@@ -1221,8 +1254,18 @@ async fn read_chunk_offset(
     let col_list = columns
         .iter()
         .zip(col_types.iter())
-        .map(|(c, t)| {
-            if is_postgres {
+        .zip(col_exprs.iter())
+        .map(|((c, t), expr)| {
+            if let Some(expression) = expr {
+                let alias = if is_postgres {
+                    quote_pg(c)?
+                } else if is_mysql {
+                    quote_mysql(c)?
+                } else {
+                    quote_mssql(c)?
+                };
+                Ok(format!("{} AS {}", expression, alias))
+            } else if is_postgres {
                 quote_pg(c)
             } else if is_mysql {
                 quote_mysql(c)
