@@ -429,7 +429,7 @@ impl UpsertWriter for PostgresUpsertWriterAdapter {
         let sink = client
             .copy_in(&copy_sql)
             .await
-            .map_err(|e| MigrateError::transfer(&self.table, format!("initiating COPY: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&self.table, format!("initiating COPY: {}", pg_err_oneline(&e))))?;
 
         let mut buf = BytesMut::with_capacity(batch.rows.len() * 512);
 
@@ -453,11 +453,11 @@ impl UpsertWriter for PostgresUpsertWriterAdapter {
         tokio::pin!(sink);
         let data = buf.freeze();
         sink.send(data).await.map_err(|e| {
-            MigrateError::transfer(&self.table, format!("sending COPY data: {}", e))
+            MigrateError::transfer(&self.table, format!("sending COPY data: {}", pg_err_oneline(&e)))
         })?;
         sink.finish()
             .await
-            .map_err(|e| MigrateError::transfer(&self.table, format!("finishing COPY: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&self.table, format!("finishing COPY: {}", pg_err_oneline(&e))))?;
 
         // Merge into target
         let pk_list: Vec<String> = pk_cols.iter().map(|c| quote_ident_unchecked(c)).collect();
@@ -659,16 +659,34 @@ impl TargetWriter for PostgresWriter {
             .map(|c| Self::quote_ident(c))
             .collect::<Result<Vec<_>>>()?;
         let unique = if idx.is_unique { "UNIQUE " } else { "" };
+        let qualified_table = Self::qualify_table(target_schema, &table.name)?;
 
         let sql = format!(
             "CREATE {}INDEX {} ON {} ({})",
             unique,
             quote_ident_unchecked(&idx.name),
-            Self::qualify_table(target_schema, &table.name)?,
+            qualified_table,
             idx_cols.join(", ")
         );
 
-        client.execute(&sql, &[]).await?;
+        match client.execute(&sql, &[]).await {
+            Ok(_) => {}
+            Err(e) if e.as_db_error().map_or(false, |db| db.code() == &tokio_postgres::error::SqlState::DUPLICATE_TABLE) => {
+                // Index name collides with an existing relation; retry with ix_ prefix
+                let renamed = format!("ix_{}", idx.name);
+                let retry_sql = format!(
+                    "CREATE {}INDEX {} ON {} ({})",
+                    unique,
+                    quote_ident_unchecked(&renamed),
+                    qualified_table,
+                    idx_cols.join(", ")
+                );
+                client.execute(&retry_sql, &[]).await?;
+                debug!("Created index {} (renamed from {}) on {}.{}", renamed, idx.name, target_schema, table.name);
+                return Ok(());
+            }
+            Err(e) => return Err(e.into()),
+        }
         debug!(
             "Created index {} on {}.{}",
             idx.name, target_schema, table.name
@@ -743,7 +761,7 @@ impl TargetWriter for PostgresWriter {
             Self::qualify_table(target_schema, &table.name)?,
             quote_ident_unchecked(&fk.name),
             fk_cols.join(", "),
-            quote_ident_unchecked(&fk.ref_schema),
+            quote_ident_unchecked(target_schema),
             quote_ident_unchecked(&fk.ref_table),
             ref_cols.join(", "),
             map_referential_action(&fk.on_delete),
@@ -926,7 +944,7 @@ impl TargetWriter for PostgresWriter {
         let sink = client
             .copy_in(&copy_sql)
             .await
-            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY init: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY init: {}", pg_err_oneline(&e))))?;
 
         // Build binary data
         let mut buf = BytesMut::with_capacity(rows.len() * 256);
@@ -956,11 +974,11 @@ impl TargetWriter for PostgresWriter {
         use futures::SinkExt;
         sink.send(data)
             .await
-            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY send: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY send: {}", pg_err_oneline(&e))))?;
 
         sink.finish()
             .await
-            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY finish: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY finish: {}", pg_err_oneline(&e))))?;
 
         Ok(row_count)
     }
@@ -1121,6 +1139,29 @@ impl TargetWriter for PostgresWriter {
     }
 }
 
+/// Flatten a tokio_postgres error to a single line.
+///
+/// In tokio-postgres 0.7, Error::Display for a server error emits only "db error" —
+/// the actual PostgreSQL message, detail, and hint are only accessible via as_db_error().
+/// This helper extracts all available fields into one semicolon-separated line so the
+/// real cause appears in the tracing log without truncation.
+fn pg_err_oneline(e: &tokio_postgres::Error) -> String {
+    if let Some(db) = e.as_db_error() {
+        let mut msg = format!("db error: {}: {}", db.severity(), db.message());
+        if let Some(detail) = db.detail() {
+            msg.push_str("; Detail: ");
+            msg.push_str(detail);
+        }
+        if let Some(hint) = db.hint() {
+            msg.push_str("; Hint: ");
+            msg.push_str(hint);
+        }
+        msg
+    } else {
+        e.to_string()
+    }
+}
+
 /// Write a SqlValue as PostgreSQL binary format.
 fn write_binary_value(buf: &mut BytesMut, value: &SqlValue<'_>) {
     match value {
@@ -1152,16 +1193,30 @@ fn write_binary_value(buf: &mut BytesMut, value: &SqlValue<'_>) {
             buf.put_f64(*f);
         }
         SqlValue::Text(s) => {
-            let bytes = s.as_bytes();
-            buf.put_i32(bytes.len() as i32);
-            buf.put_slice(bytes);
+            if s.contains('\x00') {
+                let clean = s.replace('\x00', "");
+                buf.put_i32(clean.len() as i32);
+                buf.put_slice(clean.as_bytes());
+            } else {
+                let bytes = s.as_bytes();
+                buf.put_i32(bytes.len() as i32);
+                buf.put_slice(bytes);
+            }
         }
         SqlValue::CompressedText { compressed, .. } => {
             // Decompress LZ4 data
             match lz4_flex::decompress_size_prepended(compressed) {
                 Ok(decompressed) => {
-                    buf.put_i32(decompressed.len() as i32);
-                    buf.put_slice(&decompressed);
+                    // Strip NUL bytes — PostgreSQL rejects 0x00 in UTF-8 text columns
+                    if decompressed.contains(&0u8) {
+                        let clean: Vec<u8> =
+                            decompressed.into_iter().filter(|&b| b != 0).collect();
+                        buf.put_i32(clean.len() as i32);
+                        buf.put_slice(&clean);
+                    } else {
+                        buf.put_i32(decompressed.len() as i32);
+                        buf.put_slice(&decompressed);
+                    }
                 }
                 Err(_) => {
                     buf.put_i32(0);

@@ -1365,6 +1365,13 @@ impl Orchestrator {
                         for partition in partitions {
                             // No adjustment needed: the transfer engine now uses >= for first chunk,
                             // which correctly includes the partition's min_pk boundary.
+                            let column_expressions = self
+                                .config
+                                .migration
+                                .table_overrides
+                                .get(&table.name)
+                                .map(|o| o.column_expressions.clone())
+                                .unwrap_or_default();
                             let job = TransferJob {
                                 table: table.clone(),
                                 partition_id: Some(partition.partition_id),
@@ -1374,6 +1381,7 @@ impl Orchestrator {
                                 target_mode: self.config.migration.target_mode,
                                 target_schema: self.config.target.schema.clone(),
                                 date_filter: date_filter.clone(),
+                                column_expressions,
                             };
 
                             let engine_clone = engine.clone();
@@ -1412,6 +1420,13 @@ impl Orchestrator {
             // Emit "started" progress event
             progress.emit("transferring", Some(table_name.clone()), Some("started"));
 
+            let column_expressions = self
+                .config
+                .migration
+                .table_overrides
+                .get(&table.name)
+                .map(|o| o.column_expressions.clone())
+                .unwrap_or_default();
             let job = TransferJob {
                 table: table.clone(),
                 partition_id: None,
@@ -1427,6 +1442,7 @@ impl Orchestrator {
                 target_mode: self.config.migration.target_mode,
                 target_schema: self.config.target.schema.clone(),
                 date_filter: date_filter.clone(),
+                column_expressions,
             };
 
             // Create a per-table cancellation token (for consistency with partitioned path,
@@ -1794,7 +1810,7 @@ impl Orchestrator {
                         for index in &table.indexes {
                             debug!("Creating index: {}.{}", table.name, index.name);
                             if let Err(e) = target.create_index(&table, index, &schema).await {
-                                warn!("Failed to create index {}: {}", index.name, e);
+                                warn!("Failed to create index {} on table {}: {}", index.name, table.name, e.verbose());
                                 dc.fire(
                                     &format!("CREATE INDEX {}", index.name),
                                     &table,
@@ -1852,7 +1868,7 @@ impl Orchestrator {
                                 debug!("Creating FK: {}.{}", table.name, fk.name);
                                 if let Err(e) = target.create_foreign_key(&table, fk, &schema).await
                                 {
-                                    warn!("Failed to create FK {}: {}", fk.name, e);
+                                    warn!("Failed to create FK {} on table {}: {}", fk.name, table.name, e.verbose());
                                     dc.fire(
                                         &format!("CREATE FOREIGN KEY {}", fk.name),
                                         &table,

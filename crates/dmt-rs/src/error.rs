@@ -159,6 +159,30 @@ impl MigrateError {
         )
     }
 
+    /// Return a detailed one-line description of the error, extracting the underlying
+    /// database message/detail/hint when available (tokio-postgres Display only shows "db error").
+    pub fn verbose(&self) -> String {
+        match self {
+            Self::Target(pg_err) => {
+                if let Some(db) = pg_err.as_db_error() {
+                    let mut msg = format!("{}: {}", db.severity(), db.message());
+                    if let Some(detail) = db.detail() {
+                        msg.push_str("; Detail: ");
+                        msg.push_str(detail);
+                    }
+                    if let Some(hint) = db.hint() {
+                        msg.push_str("; Hint: ");
+                        msg.push_str(hint);
+                    }
+                    msg
+                } else {
+                    pg_err.to_string()
+                }
+            }
+            _ => self.to_string(),
+        }
+    }
+
     /// Get the error type as a string for JSON output.
     pub fn error_type(&self) -> &'static str {
         match self {

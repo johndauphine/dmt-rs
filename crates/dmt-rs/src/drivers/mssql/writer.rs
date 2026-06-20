@@ -651,7 +651,7 @@ impl TargetWriter for MssqlWriter {
             Self::quote_ident(&table.name),
             Self::quote_ident(&fk.name),
             fk_cols.join(", "),
-            Self::quote_ident(&fk.ref_schema),
+            Self::quote_ident(target_schema),
             Self::quote_ident(&fk.ref_table),
             ref_cols.join(", "),
             fk.on_delete.replace('_', " "),
