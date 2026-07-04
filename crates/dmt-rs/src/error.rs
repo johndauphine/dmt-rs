@@ -120,6 +120,30 @@ impl MigrateError {
         }
     }
 
+    /// Format a PostgreSQL target error with full detail/hint fields.
+    /// Falls back to `to_string()` for all other variants.
+    pub fn verbose(&self) -> String {
+        match self {
+            Self::Target(pg_err) => {
+                if let Some(db) = pg_err.as_db_error() {
+                    let mut msg = format!("{}: {}", db.severity(), db.message());
+                    if let Some(detail) = db.detail() {
+                        msg.push_str("; Detail: ");
+                        msg.push_str(detail);
+                    }
+                    if let Some(hint) = db.hint() {
+                        msg.push_str("; Hint: ");
+                        msg.push_str(hint);
+                    }
+                    msg
+                } else {
+                    pg_err.to_string()
+                }
+            }
+            _ => self.to_string(),
+        }
+    }
+
     /// Format error with full details including error chain
     pub fn format_detailed(&self) -> String {
         let mut output = format!("Error: {}\n", self);
@@ -384,5 +408,17 @@ mod tests {
             }
             _ => panic!("Expected Transfer error"),
         }
+    }
+
+    #[test]
+    fn test_verbose_non_target_falls_back_to_to_string() {
+        let err = MigrateError::Config("bad config".into());
+        assert_eq!(err.verbose(), err.to_string());
+    }
+
+    #[test]
+    fn test_verbose_transfer_falls_back_to_to_string() {
+        let err = MigrateError::transfer("t", "msg");
+        assert_eq!(err.verbose(), err.to_string());
     }
 }

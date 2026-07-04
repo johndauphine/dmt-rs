@@ -1794,7 +1794,7 @@ impl Orchestrator {
                         for index in &table.indexes {
                             debug!("Creating index: {}.{}", table.name, index.name);
                             if let Err(e) = target.create_index(&table, index, &schema).await {
-                                warn!("Failed to create index {}: {}", index.name, e);
+                                warn!("Failed to create index {} on table {}: {}", index.name, table.name, e.verbose());
                                 dc.fire(
                                     &format!("CREATE INDEX {}", index.name),
                                     &table,
@@ -1852,7 +1852,7 @@ impl Orchestrator {
                                 debug!("Creating FK: {}.{}", table.name, fk.name);
                                 if let Err(e) = target.create_foreign_key(&table, fk, &schema).await
                                 {
-                                    warn!("Failed to create FK {}: {}", fk.name, e);
+                                    warn!("Failed to create FK {} on table {}: {}", fk.name, table.name, e.verbose());
                                     dc.fire(
                                         &format!("CREATE FOREIGN KEY {}", fk.name),
                                         &table,

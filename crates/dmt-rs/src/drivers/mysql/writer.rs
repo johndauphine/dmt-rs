@@ -700,7 +700,7 @@ impl TargetWriter for MysqlWriter {
             Self::qualify_table(target_schema, &table.name),
             Self::quote_ident(&fk.name),
             fk_cols.join(", "),
-            Self::quote_ident(&fk.ref_schema),
+            Self::quote_ident(target_schema),
             Self::quote_ident(&fk.ref_table),
             ref_cols.join(", "),
             map_referential_action(&fk.on_delete),

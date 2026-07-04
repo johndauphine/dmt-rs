@@ -12,6 +12,7 @@ use chrono::Timelike;
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use futures::SinkExt;
 use rustls::ClientConfig;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::Config as PgConfig;
 use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::{debug, info, warn};
@@ -429,7 +430,7 @@ impl UpsertWriter for PostgresUpsertWriterAdapter {
         let sink = client
             .copy_in(&copy_sql)
             .await
-            .map_err(|e| MigrateError::transfer(&self.table, format!("initiating COPY: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&self.table, format!("initiating COPY: {}", pg_err_oneline(&e))))?;
 
         let mut buf = BytesMut::with_capacity(batch.rows.len() * 512);
 
@@ -453,11 +454,11 @@ impl UpsertWriter for PostgresUpsertWriterAdapter {
         tokio::pin!(sink);
         let data = buf.freeze();
         sink.send(data).await.map_err(|e| {
-            MigrateError::transfer(&self.table, format!("sending COPY data: {}", e))
+            MigrateError::transfer(&self.table, format!("sending COPY data: {}", pg_err_oneline(&e)))
         })?;
         sink.finish()
             .await
-            .map_err(|e| MigrateError::transfer(&self.table, format!("finishing COPY: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&self.table, format!("finishing COPY: {}", pg_err_oneline(&e))))?;
 
         // Merge into target
         let pk_list: Vec<String> = pk_cols.iter().map(|c| quote_ident_unchecked(c)).collect();
@@ -668,11 +669,35 @@ impl TargetWriter for PostgresWriter {
             idx_cols.join(", ")
         );
 
-        client.execute(&sql, &[]).await?;
-        debug!(
-            "Created index {} on {}.{}",
-            idx.name, target_schema, table.name
-        );
+        match client.execute(&sql, &[]).await {
+            Ok(_) => {
+                debug!(
+                    "Created index {} on {}.{}",
+                    idx.name, target_schema, table.name
+                );
+            }
+            Err(e)
+                if e.as_db_error().map_or(false, |db| {
+                    db.code() == &SqlState::DUPLICATE_TABLE
+                        || db.code() == &SqlState::UNIQUE_VIOLATION
+                }) =>
+            {
+                let renamed = format!("ix_{}", idx.name);
+                let retry_sql = format!(
+                    "CREATE {}INDEX {} ON {} ({})",
+                    unique,
+                    quote_ident_unchecked(&renamed),
+                    Self::qualify_table(target_schema, &table.name)?,
+                    idx_cols.join(", ")
+                );
+                client.execute(&retry_sql, &[]).await?;
+                debug!(
+                    "Created index {} (renamed from {}) on {}.{}",
+                    renamed, idx.name, target_schema, table.name
+                );
+            }
+            Err(e) => return Err(e.into()),
+        }
         Ok(())
     }
 
@@ -743,7 +768,7 @@ impl TargetWriter for PostgresWriter {
             Self::qualify_table(target_schema, &table.name)?,
             quote_ident_unchecked(&fk.name),
             fk_cols.join(", "),
-            quote_ident_unchecked(&fk.ref_schema),
+            quote_ident_unchecked(target_schema),
             quote_ident_unchecked(&fk.ref_table),
             ref_cols.join(", "),
             map_referential_action(&fk.on_delete),
@@ -926,7 +951,7 @@ impl TargetWriter for PostgresWriter {
         let sink = client
             .copy_in(&copy_sql)
             .await
-            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY init: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY init: {}", pg_err_oneline(&e))))?;
 
         // Build binary data
         let mut buf = BytesMut::with_capacity(rows.len() * 256);
@@ -956,11 +981,11 @@ impl TargetWriter for PostgresWriter {
         use futures::SinkExt;
         sink.send(data)
             .await
-            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY send: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY send: {}", pg_err_oneline(&e))))?;
 
         sink.finish()
             .await
-            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY finish: {}", e)))?;
+            .map_err(|e| MigrateError::transfer(&qualified_table, format!("COPY finish: {}", pg_err_oneline(&e))))?;
 
         Ok(row_count)
     }
@@ -1152,16 +1177,30 @@ fn write_binary_value(buf: &mut BytesMut, value: &SqlValue<'_>) {
             buf.put_f64(*f);
         }
         SqlValue::Text(s) => {
-            let bytes = s.as_bytes();
-            buf.put_i32(bytes.len() as i32);
-            buf.put_slice(bytes);
+            if s.contains('\x00') {
+                let clean = s.replace('\x00', "");
+                let bytes = clean.as_bytes();
+                buf.put_i32(bytes.len() as i32);
+                buf.put_slice(bytes);
+            } else {
+                let bytes = s.as_bytes();
+                buf.put_i32(bytes.len() as i32);
+                buf.put_slice(bytes);
+            }
         }
         SqlValue::CompressedText { compressed, .. } => {
             // Decompress LZ4 data
             match lz4_flex::decompress_size_prepended(compressed) {
                 Ok(decompressed) => {
-                    buf.put_i32(decompressed.len() as i32);
-                    buf.put_slice(&decompressed);
+                    if decompressed.contains(&0u8) {
+                        let clean: Vec<u8> =
+                            decompressed.into_iter().filter(|&b| b != 0).collect();
+                        buf.put_i32(clean.len() as i32);
+                        buf.put_slice(&clean);
+                    } else {
+                        buf.put_i32(decompressed.len() as i32);
+                        buf.put_slice(&decompressed);
+                    }
                 }
                 Err(_) => {
                     buf.put_i32(0);
@@ -1496,9 +1535,74 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
     }
 }
 
+/// Format a `tokio_postgres::Error` with severity/detail/hint when available.
+fn pg_err_oneline(e: &tokio_postgres::Error) -> String {
+    if let Some(db) = e.as_db_error() {
+        let mut msg = format!("db error: {}: {}", db.severity(), db.message());
+        if let Some(detail) = db.detail() {
+            msg.push_str("; Detail: ");
+            msg.push_str(detail);
+        }
+        if let Some(hint) = db.hint() {
+            msg.push_str("; Hint: ");
+            msg.push_str(hint);
+        }
+        msg
+    } else {
+        e.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_nul_byte_stripping_text() {
+        let mut buf = BytesMut::new();
+        let val = SqlValue::Text(std::borrow::Cow::Borrowed("hel\x00lo"));
+        write_binary_value(&mut buf, &val);
+        // 4-byte length + 5 bytes "hello"
+        assert_eq!(&buf[..4], &5i32.to_be_bytes());
+        assert_eq!(&buf[4..], b"hello");
+    }
+
+    #[test]
+    fn test_nul_byte_stripping_text_none() {
+        let mut buf = BytesMut::new();
+        let val = SqlValue::Text(std::borrow::Cow::Borrowed("hello"));
+        write_binary_value(&mut buf, &val);
+        // No NUL bytes — output unchanged
+        assert_eq!(&buf[..4], &5i32.to_be_bytes());
+        assert_eq!(&buf[4..], b"hello");
+    }
+
+    #[test]
+    fn test_nul_byte_stripping_multiple() {
+        let mut buf = BytesMut::new();
+        // Multiple NUL bytes spread through the string
+        let val = SqlValue::Text(std::borrow::Cow::Borrowed("a\x00b\x00c"));
+        write_binary_value(&mut buf, &val);
+        // 3 bytes remain: "abc"
+        assert_eq!(&buf[..4], &3i32.to_be_bytes());
+        assert_eq!(&buf[4..], b"abc");
+    }
+
+    #[test]
+    fn test_money_decimal_conversion() {
+        // Verify rust_decimal can round-trip through f64 for typical money values
+        let f: f64 = 1234.56;
+        let d = rust_decimal::Decimal::try_from(f).unwrap();
+        assert_eq!(d.to_string(), "1234.56");
+
+        let f: f64 = -99.99;
+        let d = rust_decimal::Decimal::try_from(f).unwrap();
+        assert_eq!(d.to_string(), "-99.99");
+
+        let f: f64 = 0.0;
+        let d = rust_decimal::Decimal::try_from(f).unwrap();
+        assert_eq!(d.to_string(), "0");
+    }
 
     #[test]
     fn test_escape_copy_text() {
